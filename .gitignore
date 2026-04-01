@@ -1,0 +1,31 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Experiments & caches
+wandb/
+.cache/
+
+# Checkpoints & local artifacts
+*.pt
+*.pth
+*.ckpt
+artifacts/
+checkpoints/
+logs/
+runs/
+
+# Secrets
+.env
+.env.*
+
+# docs: only track AME_guide.md
+docs/*
+!docs/AME_guide.md

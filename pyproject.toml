@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ame-g1"
+version = "0.1.0"
+description = "Attention-Based Map Encoding for Unitree G1 on mjlab."
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "mjlab>=1.2.0,<2",
+  "tyro>=0.9.31",
+  "matplotlib>=3.9.0",
+]
+
+[project.scripts]
+ame-train = "ame_g1.cli.train:main"
+ame-play = "ame_g1.cli.play:main"
+ame-eval = "ame_g1.cli.eval:main"
+ame-plot-attention = "ame_g1.cli.plot_attention:main"
+
+[project.entry-points."mjlab.tasks"]
+ame_g1 = "ame_g1.config:register"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
