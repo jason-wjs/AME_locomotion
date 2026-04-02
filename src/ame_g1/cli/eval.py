@@ -35,7 +35,8 @@ class EvalArgs:
 @dataclass(frozen=True)
 class TaskArgs:
   variant: Literal["paper", "g1"] = DEFAULT_VARIANT
-  stage: Literal["stage1", "stage2"] = "stage1"
+  phase: Literal["base", "finetune"] = "base"
+  global_context: Literal["on", "off"] = "off"
 
 
 def _terrain_names(env) -> list[str]:
@@ -62,11 +63,17 @@ def main() -> None:
   args = tyro.cli(
     EvalArgs,
     args=remaining_args,
-    prog=f"ame-eval --variant {task_args.variant} --stage {task_args.stage}",
+    prog=(
+      f"ame-eval --variant {task_args.variant} "
+      f"--phase {task_args.phase} --global-context {task_args.global_context}"
+    ),
     config=mjlab.TYRO_FLAGS,
   )
 
-  task_spec = resolve_task_spec(task_args.variant, task_args.stage)
+  if task_args.variant == "paper" and task_args.global_context == "on":
+    raise ValueError("`--global-context on` is not supported for `--variant paper`.")
+  use_global_context = task_args.global_context == "on"
+  task_spec = resolve_task_spec(task_args.variant, task_args.phase)
   device = resolve_device(args.device)
   checkpoint_path = resolve_checkpoint(
     task_spec,
@@ -75,7 +82,13 @@ def main() -> None:
     wandb_checkpoint_name=args.wandb_checkpoint_name,
   )
   env, wrapped_env = make_wrapped_play_env(task_spec, device=device, num_envs=args.num_envs)
-  _, policy = load_trained_policy(task_spec, wrapped_env, device, checkpoint_path)
+  _, policy = load_trained_policy(
+    task_spec,
+    wrapped_env,
+    device,
+    checkpoint_path,
+    use_global_context=use_global_context,
+  )
 
   obs = wrapped_env.get_observations()
   robot = wrapped_env.unwrapped.scene["robot"]

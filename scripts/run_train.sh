@@ -6,8 +6,9 @@ cd "$ROOT_DIR"
 
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib}"
 
-MODE="${1:-stage1}"
+MODE="${1:-base}"
 VARIANT="${VARIANT:-g1}"
+GLOBAL_CONTEXT="${GLOBAL_CONTEXT:-off}"
 
 to_tyro_bool() {
   local value="${1,,}"
@@ -21,13 +22,6 @@ to_tyro_bool() {
   esac
 }
 
-# GPU selection:
-#   single GPU: GPU_ARGS="--gpu-ids [0]"
-#   multi GPU : GPU_ARGS="--gpu-ids [0,1]"
-#   CPU only  : GPU_ARGS="--gpu-ids None"
-#
-# Backward compatibility:
-#   GPU_ARGS="--gpu-ids 0 1" is normalized to "--gpu-ids [0,1]".
 normalize_gpu_args() {
   local raw="${GPU_ARGS:-"--gpu-ids [0]"}"
   local -a parts
@@ -76,13 +70,12 @@ normalize_gpu_args() {
 
 mapfile -t GPU_ARGS < <(normalize_gpu_args)
 
-# Shared overrides. Edit these rather than touching the command body below.
-STAGE1_ENVS="${STAGE1_ENVS:-4096}"
-STAGE2_ENVS="${STAGE2_ENVS:-4096}"
-STAGE1_ITERS="${STAGE1_ITERS:-15000}"
-STAGE2_ITERS="${STAGE2_ITERS:-3200}"
-STAGE1_RUN_NAME="${STAGE1_RUN_NAME:-${VARIANT}_stage1}"
-STAGE2_RUN_NAME="${STAGE2_RUN_NAME:-${VARIANT}_stage2}"
+BASE_ENVS="${BASE_ENVS:-4096}"
+FINETUNE_ENVS="${FINETUNE_ENVS:-4096}"
+BASE_ITERS="${BASE_ITERS:-15000}"
+FINETUNE_ITERS="${FINETUNE_ITERS:-3200}"
+BASE_RUN_NAME="${BASE_RUN_NAME:-${VARIANT}_base}"
+FINETUNE_RUN_NAME="${FINETUNE_RUN_NAME:-${VARIANT}_finetune}"
 LOGGER="${LOGGER:-tensorboard}"
 WANDB_PROJECT="${WANDB_PROJECT:-ame_g1}"
 WANDB_ENTITY="${WANDB_ENTITY:-${WANDB_USERNAME:-}}"
@@ -91,9 +84,7 @@ VIDEO="$(to_tyro_bool "${VIDEO:-false}")"
 VIDEO_LENGTH="${VIDEO_LENGTH:-200}"
 VIDEO_INTERVAL="${VIDEO_INTERVAL:-2000}"
 NAN_GUARD="$(to_tyro_bool "${NAN_GUARD:-false}")"
-
-# Optional manual override for stage2.
-STAGE1_CHECKPOINT="${STAGE1_CHECKPOINT:-}"
+BASE_CHECKPOINT="${BASE_CHECKPOINT:-}"
 
 if [[ "$LOGGER" == "wandb" ]]; then
   export WANDB_DIR="${WANDB_DIR:-$ROOT_DIR/wandb}"
@@ -107,8 +98,8 @@ if [[ "$LOGGER" == "wandb" ]]; then
   fi
 fi
 
-find_latest_stage1_checkpoint() {
-  find "$ROOT_DIR/logs/rsl_rl/ame_${VARIANT}_v2_stage1" -type f -name 'model_*.pt' 2>/dev/null \
+find_latest_base_checkpoint() {
+  find "$ROOT_DIR/logs/rsl_rl/ame_${VARIANT}_v3_base" -type f -name 'model_*.pt' 2>/dev/null \
     | sort \
     | tail -n 1
 }
@@ -132,28 +123,30 @@ build_common_args() {
   printf '%s\n' "${args[@]}"
 }
 
-run_stage1() {
-  mapfile -t COMMON_ARGS < <(build_common_args "$STAGE1_RUN_NAME" "$STAGE1_ENVS" "$STAGE1_ITERS")
+run_base() {
+  mapfile -t COMMON_ARGS < <(build_common_args "$BASE_RUN_NAME" "$BASE_ENVS" "$BASE_ITERS")
   uv run ame-train \
     --variant "$VARIANT" \
-    --stage stage1 \
+    --phase base \
+    --global-context "$GLOBAL_CONTEXT" \
     "${GPU_ARGS[@]}" \
     "${COMMON_ARGS[@]}"
 }
 
-run_stage2() {
-  local checkpoint="${STAGE1_CHECKPOINT}"
+run_finetune() {
+  local checkpoint="$BASE_CHECKPOINT"
   if [[ -z "$checkpoint" ]]; then
-    checkpoint="$(find_latest_stage1_checkpoint)"
+    checkpoint="$(find_latest_base_checkpoint)"
   fi
   if [[ -z "$checkpoint" ]]; then
-    echo "No Stage 1 checkpoint found. Set STAGE1_CHECKPOINT=/abs/path/to/model.pt first." >&2
+    echo "No base checkpoint found. Set BASE_CHECKPOINT=/abs/path/to/model.pt first." >&2
     exit 1
   fi
-  mapfile -t COMMON_ARGS < <(build_common_args "$STAGE2_RUN_NAME" "$STAGE2_ENVS" "$STAGE2_ITERS")
+  mapfile -t COMMON_ARGS < <(build_common_args "$FINETUNE_RUN_NAME" "$FINETUNE_ENVS" "$FINETUNE_ITERS")
   uv run ame-train \
     --variant "$VARIANT" \
-    --stage stage2 \
+    --phase finetune \
+    --global-context "$GLOBAL_CONTEXT" \
     --checkpoint-file "$checkpoint" \
     "${GPU_ARGS[@]}" \
     "${COMMON_ARGS[@]}"
@@ -162,7 +155,8 @@ run_stage2() {
 run_smoke() {
   uv run ame-train \
     --variant "$VARIANT" \
-    --stage stage1 \
+    --phase base \
+    --global-context "$GLOBAL_CONTEXT" \
     --gpu-ids None \
     --env.scene.num-envs 64 \
     --agent.run-name smoke_cpu \
@@ -178,43 +172,45 @@ case "$MODE" in
   smoke)
     run_smoke
     ;;
-  stage1)
-    run_stage1
+  base)
+    run_base
     ;;
-  stage2)
-    run_stage2
+  finetune)
+    run_finetune
     ;;
   full)
-    run_stage1
-    run_stage2
+    run_base
+    run_finetune
     ;;
   *)
     cat >&2 <<'EOF'
 Usage:
-  scripts/train_ame1_g1.sh smoke
-  scripts/train_ame1_g1.sh stage1
-  scripts/train_ame1_g1.sh stage2
-  scripts/train_ame1_g1.sh full
+  scripts/run_train.sh smoke
+  scripts/run_train.sh base
+  scripts/run_train.sh finetune
+  scripts/run_train.sh full
 
 Optional environment variables:
   VARIANT=g1
   VARIANT=paper
+  GLOBAL_CONTEXT=off
+  GLOBAL_CONTEXT=on
   GPU_ARGS="--gpu-ids [0]"
   GPU_ARGS="--gpu-ids [0,1]"
-  STAGE1_ENVS=4096
-  STAGE2_ENVS=4096
-  STAGE1_ITERS=15000
-  STAGE2_ITERS=3200
-  STAGE1_RUN_NAME=my_stage1
-  STAGE2_RUN_NAME=my_stage2
-  STAGE1_CHECKPOINT=/abs/path/to/model.pt
+  BASE_ENVS=4096
+  FINETUNE_ENVS=4096
+  BASE_ITERS=15000
+  FINETUNE_ITERS=3200
+  BASE_RUN_NAME=my_base
+  FINETUNE_RUN_NAME=my_finetune
+  BASE_CHECKPOINT=/abs/path/to/model.pt
   LOGGER=tensorboard
   LOGGER=wandb
   WANDB_PROJECT=ame_g1
   WANDB_USERNAME=my_team_or_user
   WANDB_ENTITY=my_team_or_user
   WANDB_MODE=offline
-  WANDB_TAGS=ame,g1,stage1
+  WANDB_TAGS=ame,g1,base
   UPLOAD_MODEL=false
   VIDEO=true
   VIDEO_LENGTH=200

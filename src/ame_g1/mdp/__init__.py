@@ -2,14 +2,25 @@
 
 from ame_g1.mdp.events import resample_map_scan_drift as resample_map_scan_drift
 from ame_g1.mdp.observations import terrain_points as terrain_points
+from ame_g1.mdp.rewards import air_time_variance_penalty as air_time_variance_penalty
+from ame_g1.mdp.rewards import ang_vel_xy_l2 as ang_vel_xy_l2
 from ame_g1.mdp.rewards import ankle_orientation_penalty as ankle_orientation_penalty
+from ame_g1.mdp.rewards import applied_torque_limits as applied_torque_limits
 from ame_g1.mdp.rewards import body_angular_velocity_penalty_b as body_angular_velocity_penalty_b
 from ame_g1.mdp.rewards import body_linear_velocity_penalty as body_linear_velocity_penalty
 from ame_g1.mdp.rewards import body_projected_gravity_l2 as body_projected_gravity_l2
+from ame_g1.mdp.rewards import feet_air_time_positive_biped as feet_air_time_positive_biped
 from ame_g1.mdp.rewards import foot_contact_force_penalty as foot_contact_force_penalty
+from ame_g1.mdp.rewards import feet_stumble as feet_stumble
+from ame_g1.mdp.rewards import feet_too_near as feet_too_near
+from ame_g1.mdp.rewards import joint_coordination_rel as joint_coordination_rel
+from ame_g1.mdp.rewards import joint_deviation_l1 as joint_deviation_l1
 from ame_g1.mdp.rewards import joint_deviation_threshold as joint_deviation_threshold
 from ame_g1.mdp.rewards import no_fly_penalty as no_fly_penalty
 from ame_g1.mdp.rewards import standing_joint_position_penalty as standing_joint_position_penalty
 from ame_g1.mdp.rewards import standing_joint_velocity_penalty as standing_joint_velocity_penalty
+from ame_g1.mdp.rewards import track_ang_vel_z_world_exp as track_ang_vel_z_world_exp
 from ame_g1.mdp.rewards import track_body_angular_velocity as track_body_angular_velocity
 from ame_g1.mdp.rewards import track_body_linear_velocity as track_body_linear_velocity
+from ame_g1.mdp.rewards import track_lin_vel_xy_yaw_frame_exp as track_lin_vel_xy_yaw_frame_exp
+from ame_g1.mdp.rewards import undesired_contacts as undesired_contacts

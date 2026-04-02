@@ -24,23 +24,23 @@ class VariantConfigTests(unittest.TestCase):
   def test_default_variant_is_g1(self) -> None:
     self.assertEqual(DEFAULT_VARIANT, "g1")
 
-  def test_all_variant_stage_pairs_are_defined(self) -> None:
+  def test_all_variant_phase_pairs_are_defined(self) -> None:
     specs = list(iter_task_specs())
     self.assertEqual(
-      {(spec.variant, spec.stage) for spec in specs},
+      {(spec.variant, spec.phase) for spec in specs},
       {
-        ("paper", "stage1"),
-        ("paper", "stage2"),
-        ("g1", "stage1"),
-        ("g1", "stage2"),
+        ("paper", "base"),
+        ("paper", "finetune"),
+        ("g1", "base"),
+        ("g1", "finetune"),
       },
     )
     self.assertEqual(len({spec.task_id for spec in specs}), 4)
     self.assertEqual(len({spec.experiment_name for spec in specs}), 4)
 
   def test_variant_specific_env_and_model_cfgs_match_plan(self) -> None:
-    paper = resolve_task_spec("paper", "stage1")
-    g1 = resolve_task_spec("g1", "stage1")
+    paper = resolve_task_spec("paper", "base")
+    g1 = resolve_task_spec("g1", "base")
 
     paper_env = load_env_cfg(paper.task_id)
     g1_env = load_env_cfg(g1.task_id)
@@ -69,7 +69,7 @@ class VariantConfigTests(unittest.TestCase):
     self.assertEqual(g1_rl.actor.terrain_input_mode, "xyz")
     self.assertFalse(g1_rl.actor.concat_coords_post_cnn)
     self.assertTrue(g1_rl.actor.cnn_downsample)
-    self.assertTrue(g1_rl.actor.attach_global)
+    self.assertFalse(g1_rl.actor.attach_global)
 
 
 if __name__ == "__main__":

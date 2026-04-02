@@ -18,8 +18,8 @@ from mjlab.tasks.velocity import mdp as vel_mdp
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from ame_g1 import mdp as ame_mdp
-from ame_g1.config.variants import DEFAULT_VARIANT, AmeStage, AmeVariant, resolve_task_spec
-from ame_g1.terrains import make_stage_terrain_generator
+from ame_g1.config.variants import DEFAULT_VARIANT, AmePhase, AmeVariant, resolve_task_spec
+from ame_g1.terrains import make_phase_terrain_generator
 
 _ROBOT_CFG = SceneEntityCfg("robot")
 _TORSO_CFG = SceneEntityCfg("robot", body_names=["torso_link"])
@@ -30,10 +30,18 @@ _ANKLES_CFG = SceneEntityCfg(
 _ARMS_CFG = SceneEntityCfg(
   "robot",
   joint_names=[
-    ".*shoulder.*",
-    ".*elbow.*",
-    ".*wrist.*",
+    ".*_shoulder_.*_joint",
+    ".*_elbow_joint",
+    ".*_wrist_.*",
   ],
+)
+_HIP_CFG = SceneEntityCfg(
+  "robot",
+  joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"],
+)
+_WAIST_CFG = SceneEntityCfg(
+  "robot",
+  joint_names=["waist.*"],
 )
 _BODY_CHAIN_CFG = SceneEntityCfg(
   "robot",
@@ -57,18 +65,13 @@ _STANCE_JOINTS_CFG = SceneEntityCfg(
 
 
 def _make_observations(
-  stage: AmeStage,
+  phase: AmePhase,
   variant: AmeVariant,
   play: bool,
 ) -> dict[str, ObservationGroupCfg]:
-  stage2_train = stage == "stage2" and not play
+  finetune_train = phase == "finetune" and not play
 
   actor_proprio_terms = {
-    "base_lin_vel": ObservationTermCfg(
-      func=vel_mdp.builtin_sensor,
-      params={"sensor_name": "robot/imu_lin_vel"},
-      noise=Unoise(n_min=-0.5, n_max=0.5),
-    ),
     "base_ang_vel": ObservationTermCfg(
       func=vel_mdp.builtin_sensor,
       params={"sensor_name": "robot/imu_ang_vel"},
@@ -97,8 +100,8 @@ def _make_observations(
       func=ame_mdp.terrain_points,
       params={
         "sensor_name": "terrain_scan",
-        "height_noise_range": (-0.03, 0.03) if stage2_train else None,
-        "apply_drift": stage2_train,
+        "height_noise_range": (-0.03, 0.03) if finetune_train else None,
+        "apply_drift": finetune_train,
         "clip_height_range": (-1.2, 0.0),
       },
     ),
@@ -134,12 +137,12 @@ def _make_observations(
     "actor_proprio": ObservationGroupCfg(
       terms=actor_proprio_terms,
       concatenate_terms=True,
-      enable_corruption=stage2_train,
+      enable_corruption=finetune_train,
     ),
     "actor_terrain": ObservationGroupCfg(
       terms=actor_terrain_terms,
       concatenate_terms=True,
-      enable_corruption=stage2_train,
+      enable_corruption=finetune_train,
     ),
     "critic_proprio": ObservationGroupCfg(
       terms=critic_proprio_terms,
@@ -154,61 +157,81 @@ def _make_observations(
   }
 
 
-def _make_rewards(stage: AmeStage):
+def _make_rewards(phase: AmePhase):
   rewards = {
-    "track_linear_velocity": RewardTermCfg(
-      func=ame_mdp.track_body_linear_velocity,
-      weight=5.0,
+    "termination_penalty": RewardTermCfg(func=envs_mdp.is_terminated, weight=-200.0),
+    "track_lin_vel_xy_exp": RewardTermCfg(
+      func=ame_mdp.track_lin_vel_xy_yaw_frame_exp,
+      weight=2.0,
       params={
         "command_name": "twist",
-        "std": math.sqrt(0.25),
-        "asset_cfg": deepcopy(_TORSO_CFG),
+        "std": 0.25,
       },
     ),
-    "track_angular_velocity": RewardTermCfg(
-      func=ame_mdp.track_body_angular_velocity,
+    "track_ang_vel_z_exp": RewardTermCfg(
+      func=ame_mdp.track_ang_vel_z_world_exp,
       weight=3.0,
       params={
         "command_name": "twist",
-        "std": math.sqrt(0.5),
-        "asset_cfg": deepcopy(_TORSO_CFG),
+        "std": 0.25,
       },
     ),
-    "termination": RewardTermCfg(func=envs_mdp.is_terminated, weight=-200.0),
-    "action_rate": RewardTermCfg(func=vel_mdp.action_rate_l2, weight=-5.0e-3),
-    "joint_acc": RewardTermCfg(
-      func=vel_mdp.joint_acc_l2,
-      weight=-1.0e-6,
-      params={"asset_cfg": deepcopy(_ROBOT_CFG)},
+    "ang_vel_xy_l2": RewardTermCfg(
+      func=ame_mdp.ang_vel_xy_l2,
+      weight=-0.05,
     ),
-    "joint_torques": RewardTermCfg(
-      func=vel_mdp.joint_torques_l2,
-      weight=-2.0e-5,
-      params={"asset_cfg": deepcopy(_ROBOT_CFG)},
-    ),
-    "joint_pos_limits": RewardTermCfg(
-      func=vel_mdp.joint_pos_limits,
-      weight=-10.0,
-      params={"asset_cfg": deepcopy(_ROBOT_CFG)},
-    ),
-    "body_linear_velocity": RewardTermCfg(
-      func=ame_mdp.body_linear_velocity_penalty,
-      weight=-5.0e-2,
-      params={"asset_cfg": deepcopy(_TORSO_CFG)},
-    ),
-    "body_ang_vel": RewardTermCfg(
-      func=ame_mdp.body_angular_velocity_penalty_b,
-      weight=-5.0e-2,
-      params={"asset_cfg": deepcopy(_TORSO_CFG)},
-    ),
-    "foot_contact_forces": RewardTermCfg(
-      func=ame_mdp.foot_contact_force_penalty,
-      weight=-2.5e-5,
-      params={"sensor_name": "feet_ground_contact", "force_threshold": 700.0},
-    ),
-    "foot_slip": RewardTermCfg(
-      func=vel_mdp.feet_slip,
+    "undesired_contacts": RewardTermCfg(
+      func=ame_mdp.undesired_contacts,
       weight=-1.0,
+      params={"sensor_name": "nonfoot_ground_contact", "threshold": 1.0},
+    ),
+    "dof_torques_l2": RewardTermCfg(
+      func=vel_mdp.joint_torques_l2,
+      weight=-1.5e-7,
+      params={"asset_cfg": deepcopy(_ROBOT_CFG)},
+    ),
+    "dof_acc_l2": RewardTermCfg(
+      func=vel_mdp.joint_acc_l2,
+      weight=-1.25e-7,
+      params={"asset_cfg": deepcopy(_ROBOT_CFG)},
+    ),
+    "dof_vel_l2": RewardTermCfg(
+      func=vel_mdp.joint_vel_l2,
+      weight=-0.001,
+      params={"asset_cfg": deepcopy(_ROBOT_CFG)},
+    ),
+    "dof_pos_limits": RewardTermCfg(
+      func=vel_mdp.joint_pos_limits,
+      weight=-1.0,
+      params={"asset_cfg": deepcopy(_ROBOT_CFG)},
+    ),
+    "dof_torques_limits": RewardTermCfg(
+      func=ame_mdp.applied_torque_limits,
+      weight=-0.01,
+      params={"asset_cfg": deepcopy(_ROBOT_CFG)},
+    ),
+    "action_rate_l2": RewardTermCfg(func=vel_mdp.action_rate_l2, weight=-0.01),
+    "flat_orientation_l2": RewardTermCfg(
+      func=vel_mdp.flat_orientation_l2,
+      weight=-2.0,
+    ),
+    "feet_air_time": RewardTermCfg(
+      func=ame_mdp.feet_air_time_positive_biped,
+      weight=0.25,
+      params={
+        "command_name": "twist",
+        "sensor_name": "feet_ground_contact",
+        "threshold": 0.6,
+      },
+    ),
+    "feet_air_time_variance": RewardTermCfg(
+      func=ame_mdp.air_time_variance_penalty,
+      weight=-0.7,
+      params={"sensor_name": "feet_ground_contact"},
+    ),
+    "feet_slide": RewardTermCfg(
+      func=vel_mdp.feet_slip,
+      weight=-0.1,
       params={
         "sensor_name": "feet_ground_contact",
         "command_name": "twist",
@@ -216,51 +239,57 @@ def _make_rewards(stage: AmeStage):
         "asset_cfg": deepcopy(_FEET_CFG),
       },
     ),
-    "joint_deviation_arms": RewardTermCfg(
-      func=ame_mdp.joint_deviation_threshold,
-      weight=-0.5,
-      params={"threshold": 0.25, "asset_cfg": deepcopy(_ARMS_CFG)},
-    ),
-    "no_fly": RewardTermCfg(
-      func=ame_mdp.no_fly_penalty,
-      weight=-5.0,
+    "feet_stumble": RewardTermCfg(
+      func=ame_mdp.feet_stumble,
+      weight=-2.0,
       params={"sensor_name": "feet_ground_contact"},
     ),
-    "straight_body": RewardTermCfg(
-      func=ame_mdp.body_projected_gravity_l2,
-      weight=-3.0,
-      params={"asset_cfg": deepcopy(_BODY_CHAIN_CFG)},
+    "feet_too_near": RewardTermCfg(
+      func=ame_mdp.feet_too_near,
+      weight=-1.0,
+      params={"threshold": 0.2, "asset_cfg": deepcopy(_ANKLES_CFG)},
     ),
-    "ankle_orientation": RewardTermCfg(
-      func=ame_mdp.ankle_orientation_penalty,
-      weight=-0.5,
+    "joint_coordination": RewardTermCfg(
+      func=ame_mdp.joint_coordination_rel,
+      weight=-0.2,
       params={
-        "asset_cfg": deepcopy(_ANKLES_CFG),
-        "sensor_name": "terrain_scan",
-        "elevation_threshold": 0.18,
-        "reduced_scale": 0.1,
+        "asset_cfg": deepcopy(_ROBOT_CFG),
+        "coord_joints": [
+          ["left_hip_pitch_joint", "right_shoulder_pitch_joint"],
+          ["right_hip_pitch_joint", "left_shoulder_pitch_joint"],
+        ],
+        "coord_signs": [
+          [1.0, 1.0],
+          [1.0, 1.0],
+        ],
       },
+    ),
+    "joint_deviation_hip": RewardTermCfg(
+      func=ame_mdp.joint_deviation_l1,
+      weight=-0.1,
+      params={"asset_cfg": deepcopy(_HIP_CFG)},
+    ),
+    "joint_deviation_arms": RewardTermCfg(
+      func=ame_mdp.joint_deviation_l1,
+      weight=-0.3,
+      params={"asset_cfg": deepcopy(_ARMS_CFG)},
+    ),
+    "joint_deviation_waists": RewardTermCfg(
+      func=ame_mdp.joint_deviation_l1,
+      weight=-1.0,
+      params={"asset_cfg": deepcopy(_WAIST_CFG)},
     ),
   }
-  if stage == "stage2":
-    rewards["standing_joint_pos"] = RewardTermCfg(
-      func=ame_mdp.standing_joint_position_penalty,
-      weight=-0.1,
-      params={
-        "command_name": "twist",
-        "command_threshold": 0.1,
-        "asset_cfg": deepcopy(_STANCE_JOINTS_CFG),
-      },
-    )
-    rewards["standing_joint_vel"] = RewardTermCfg(
-      func=ame_mdp.standing_joint_velocity_penalty,
-      weight=-0.5,
-      params={
-        "command_name": "twist",
-        "command_threshold": 0.1,
-        "asset_cfg": deepcopy(_STANCE_JOINTS_CFG),
-      },
-    )
+  if phase == "finetune":
+    rewards["dof_torques_limits"].weight = -0.05
+    rewards["action_rate_l2"].weight = -0.05
+    rewards["flat_orientation_l2"].weight = -5.0
+    rewards["feet_air_time"].weight = 0.5
+    rewards["feet_air_time_variance"].weight = -2.0
+    rewards["feet_slide"].weight = -0.3
+    rewards["feet_stumble"].weight = -5.0
+    rewards["feet_too_near"].weight = -5.0
+    rewards["joint_coordination"].weight = -0.5
   return rewards
 
 
@@ -278,7 +307,7 @@ def _make_terminations():
   }
 
 
-def _make_stage_events(cfg, stage: AmeStage, play: bool) -> dict[str, EventTermCfg]:
+def _make_phase_events(cfg, phase: AmePhase, play: bool) -> dict[str, EventTermCfg]:
   events = {
     "reset_base": cfg.events["reset_base"],
     "reset_robot_joints": cfg.events["reset_robot_joints"],
@@ -290,7 +319,7 @@ def _make_stage_events(cfg, stage: AmeStage, play: bool) -> dict[str, EventTermC
       params={},
     )
     return events
-  if stage == "stage2":
+  if phase == "finetune":
     events["push_robot"] = cfg.events["push_robot"]
     events["foot_friction"] = cfg.events["foot_friction"]
     events["encoder_bias"] = cfg.events["encoder_bias"]
@@ -321,20 +350,34 @@ def _make_stage_events(cfg, stage: AmeStage, play: bool) -> dict[str, EventTermC
   return events
 
 
-def _ensure_torso_contact_sensor(cfg) -> None:
+def _ensure_contact_sensors(cfg) -> None:
   sensor_names = {sensor.name for sensor in (cfg.scene.sensors or ())}
-  if "torso_ground_contact" in sensor_names:
-    return
-  torso_contact_cfg = ContactSensorCfg(
-    name="torso_ground_contact",
-    primary=ContactMatch(mode="body", pattern="torso_link", entity="robot"),
-    secondary=ContactMatch(mode="body", pattern="terrain"),
-    fields=("found", "force"),
-    reduce="none",
-    num_slots=1,
-    history_length=4,
-  )
-  cfg.scene.sensors = (cfg.scene.sensors or ()) + (torso_contact_cfg,)
+  sensors = list(cfg.scene.sensors or ())
+  if "torso_ground_contact" not in sensor_names:
+    sensors.append(
+      ContactSensorCfg(
+        name="torso_ground_contact",
+        primary=ContactMatch(mode="body", pattern="torso_link", entity="robot"),
+        secondary=ContactMatch(mode="body", pattern="terrain"),
+        fields=("found", "force"),
+        reduce="none",
+        num_slots=1,
+        history_length=4,
+      )
+    )
+  if "nonfoot_ground_contact" not in sensor_names:
+    sensors.append(
+      ContactSensorCfg(
+        name="nonfoot_ground_contact",
+        primary=ContactMatch(mode="body", pattern="(?!.*ankle.*).*", entity="robot"),
+        secondary=ContactMatch(mode="body", pattern="terrain"),
+        fields=("found", "force"),
+        reduce="netforce",
+        num_slots=1,
+        history_length=4,
+      )
+    )
+  cfg.scene.sensors = tuple(sensors)
 
 
 def _configure_terrain_scan(cfg, variant: AmeVariant) -> None:
@@ -350,25 +393,25 @@ def _configure_terrain_scan(cfg, variant: AmeVariant) -> None:
 
 
 def unitree_g1_ame_env_cfg(
-  stage: AmeStage,
+  phase: AmePhase,
   variant: AmeVariant = DEFAULT_VARIANT,
   play: bool = False,
 ):
   """Build the AME environment on top of mjlab's Unitree G1 rough task."""
 
   cfg = deepcopy(unitree_g1_rough_env_cfg(play=play))
-  task_spec = resolve_task_spec(variant, stage)
+  task_spec = resolve_task_spec(variant, phase)
   cfg.seed = 42
   cfg.episode_length_s = 20.0 if not play else int(1e9)
   cfg.scene.num_envs = task_spec.play_num_envs if play else task_spec.train_num_envs
-  cfg.scene.terrain.terrain_generator = make_stage_terrain_generator(stage=stage, play=play)  # type: ignore[union-attr]
+  cfg.scene.terrain.terrain_generator = make_phase_terrain_generator(phase=phase, play=play)  # type: ignore[union-attr]
   cfg.scene.terrain.max_init_terrain_level = 5  # type: ignore[union-attr]
   _configure_terrain_scan(cfg, variant)
-  _ensure_torso_contact_sensor(cfg)
-  cfg.observations = _make_observations(stage=stage, variant=variant, play=play)
-  cfg.rewards = _make_rewards(stage=stage)
+  _ensure_contact_sensors(cfg)
+  cfg.observations = _make_observations(phase=phase, variant=variant, play=play)
+  cfg.rewards = _make_rewards(phase=phase)
   cfg.terminations = _make_terminations()
-  cfg.events = _make_stage_events(cfg, stage=stage, play=play)
+  cfg.events = _make_phase_events(cfg, phase=phase, play=play)
   if play:
     cfg.curriculum = {}
   else:

@@ -9,7 +9,7 @@ from mjlab.terrains import (
   TerrainGeneratorCfg,
 )
 
-from ame_g1.config.variants import AmeStage
+from ame_g1.config.variants import AmePhase
 from ame_g1.terrains.families import (
   GapTerrainCfg,
   PalletTerrainCfg,
@@ -20,7 +20,7 @@ from ame_g1.terrains.families import (
 _TERRAIN_SIZE = (8.0, 4.0)
 
 
-def _paper_stage1_terrains():
+def _paper_base_terrains():
   return {
     "pallets": PalletTerrainCfg(proportion=1.0),
     "gaps": GapTerrainCfg(proportion=1.0),
@@ -38,7 +38,7 @@ def _paper_stage1_terrains():
   }
 
 
-def _guide_extra_stage1_terrains():
+def _guide_extra_base_terrains():
   return {
     "stairs": StairRunTerrainCfg(proportion=1.0),
     "pits": BoxOpenStairsTerrainCfg(
@@ -60,7 +60,7 @@ def _guide_extra_stage1_terrains():
   }
 
 
-def _paper_stage2_only_terrains():
+def _paper_finetune_only_terrains():
   return {
     "pentagon_stones": StonePathTerrainCfg(
       proportion=1.0,
@@ -96,7 +96,7 @@ def _paper_stage2_only_terrains():
   }
 
 
-def _guide_extra_stage2_terrains():
+def _guide_extra_finetune_terrains():
   return {
     "narrow_stairs": StairRunTerrainCfg(
       proportion=1.0,
@@ -107,12 +107,12 @@ def _guide_extra_stage2_terrains():
   }
 
 
-def make_stage_terrain_generator(stage: AmeStage, play: bool = False) -> TerrainGeneratorCfg:
-  stage1 = _paper_stage1_terrains()
-  if stage == "stage2":
-    sub_terrains = {**stage1, **_paper_stage2_only_terrains()}
+def make_phase_terrain_generator(phase: AmePhase, play: bool = False) -> TerrainGeneratorCfg:
+  base_terrains = _paper_base_terrains()
+  if phase == "finetune":
+    sub_terrains = {**base_terrains, **_paper_finetune_only_terrains()}
   else:
-    sub_terrains = stage1
+    sub_terrains = base_terrains
 
   return TerrainGeneratorCfg(
     seed=42,

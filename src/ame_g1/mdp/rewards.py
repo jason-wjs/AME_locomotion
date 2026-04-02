@@ -11,6 +11,10 @@ from mjlab.utils.lab_api.math import quat_apply_inverse
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
 
+def _command_norm(command: torch.Tensor) -> torch.Tensor:
+  return torch.norm(command[:, :2], dim=1) + torch.abs(command[:, 2])
+
+
 def _body_velocities_b(
   env,
   asset_cfg: SceneEntityCfg,
@@ -29,6 +33,196 @@ def _body_velocities_b(
     ang_vel_w.reshape(-1, 3),
   ).reshape(shape[0], shape[1], 3)
   return lin_vel_b, ang_vel_b
+
+
+def track_lin_vel_xy_yaw_frame_exp(
+  env,
+  std: float,
+  command_name: str,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Reward commanded XY velocity tracking in the robot yaw frame."""
+
+  asset = env.scene[asset_cfg.name]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None
+  actual_xy = asset.data.root_link_lin_vel_b[:, :2]
+  xy_error = torch.sum(torch.square(command[:, :2] - actual_xy), dim=1)
+  return torch.exp(-xy_error / std**2)
+
+
+def track_ang_vel_z_world_exp(
+  env,
+  std: float,
+  command_name: str,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Reward commanded yaw-rate tracking in world frame."""
+
+  asset = env.scene[asset_cfg.name]
+  command = env.command_manager.get_command(command_name)
+  assert command is not None
+  z_error = torch.square(command[:, 2] - asset.data.root_link_ang_vel_w[:, 2])
+  return torch.exp(-z_error / std**2)
+
+
+def ang_vel_xy_l2(
+  env,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Penalize roll/pitch angular velocity on the root link."""
+
+  asset = env.scene[asset_cfg.name]
+  return torch.sum(torch.square(asset.data.root_link_ang_vel_b[:, :2]), dim=1)
+
+
+def undesired_contacts(
+  env,
+  sensor_name: str,
+  threshold: float = 1.0,
+) -> torch.Tensor:
+  """Penalize non-foot contacts whose force exceeds threshold."""
+
+  sensor: ContactSensor = env.scene[sensor_name]
+  assert sensor.data.force is not None
+  force_norm = torch.norm(sensor.data.force, dim=-1)
+  return torch.sum((force_norm > threshold).float(), dim=1)
+
+
+def applied_torque_limits(
+  env,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Penalize actuator efforts that exceed configured force limits."""
+
+  asset = env.scene[asset_cfg.name]
+  applied = torch.abs(asset.data.actuator_force)
+  force_range = env.sim.model.actuator_forcerange
+  if force_range.ndim == 2:
+    max_limit = torch.maximum(torch.abs(force_range[:, 0]), torch.abs(force_range[:, 1]))
+    max_limit = max_limit.unsqueeze(0)
+  elif force_range.ndim == 3:
+    max_limit = torch.maximum(torch.abs(force_range[..., 0]), torch.abs(force_range[..., 1]))
+  else:
+    raise ValueError(f"Unexpected actuator_forcerange ndim: {force_range.ndim}")
+
+  num_ctrl = min(applied.shape[1], max_limit.shape[1])
+  applied = applied[:, :num_ctrl]
+  max_limit = max_limit[:, :num_ctrl]
+  safe_limit = torch.clamp(max_limit, min=1e-6)
+  excess = torch.clamp(applied - safe_limit, min=0.0)
+  return torch.sum(excess / safe_limit, dim=1)
+
+
+def feet_air_time_positive_biped(
+  env,
+  sensor_name: str,
+  command_name: str,
+  threshold: float = 0.6,
+) -> torch.Tensor:
+  """Reward positive swing air-time at first contact for biped feet."""
+
+  sensor: ContactSensor = env.scene[sensor_name]
+  last_air_time = sensor.data.last_air_time
+  assert last_air_time is not None
+  first_contact = sensor.compute_first_contact(dt=env.step_dt)
+  reward = torch.sum(torch.clamp(last_air_time - threshold, min=0.0) * first_contact.float(), dim=1)
+  command = env.command_manager.get_command(command_name)
+  assert command is not None
+  return reward * (_command_norm(command) > 0.1).float()
+
+
+def air_time_variance_penalty(
+  env,
+  sensor_name: str,
+) -> torch.Tensor:
+  """Penalize mismatched left/right swing and stance timing."""
+
+  sensor: ContactSensor = env.scene[sensor_name]
+  last_air_time = sensor.data.last_air_time
+  last_contact_time = sensor.data.last_contact_time
+  assert last_air_time is not None
+  assert last_contact_time is not None
+  return torch.var(torch.clip(last_air_time, max=0.5), dim=1) + torch.var(
+    torch.clip(last_contact_time, max=0.5),
+    dim=1,
+  )
+
+
+def feet_stumble(
+  env,
+  sensor_name: str,
+) -> torch.Tensor:
+  """Penalize feet colliding with steep obstacles."""
+
+  sensor: ContactSensor = env.scene[sensor_name]
+  assert sensor.data.force is not None
+  forces_z = torch.abs(sensor.data.force[:, :, 2])
+  forces_xy = torch.linalg.norm(sensor.data.force[:, :, :2], dim=2)
+  return torch.any(forces_xy > 4.0 * forces_z, dim=1).float()
+
+
+def feet_too_near(
+  env,
+  threshold: float = 0.2,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Penalize feet distance that is too narrow."""
+
+  asset = env.scene[asset_cfg.name]
+  feet_pos = asset.data.body_link_pos_w[:, asset_cfg.body_ids, :]
+  distance = torch.norm(feet_pos[:, 0] - feet_pos[:, 1], dim=-1)
+  return torch.clamp(threshold - distance, min=0.0)
+
+
+def joint_coordination_rel(
+  env,
+  asset_cfg: SceneEntityCfg,
+  coord_joints: list[list[str]],
+  coord_signs: list[list[float]] | None = None,
+) -> torch.Tensor:
+  """Penalize mismatch between coordinated cross-body joint pairs."""
+
+  asset = env.scene[asset_cfg.name]
+  if not hasattr(env, "_ame_joint_coord_joints_cache") or env._ame_joint_coord_joints_cache is None:
+    cache = []
+    for joint_pair in coord_joints:
+      joint_ids = []
+      for joint_name in joint_pair:
+        ids, _ = asset.find_joints(joint_name)
+        if not ids:
+          raise ValueError(f"Joint pattern '{joint_name}' did not match any joints.")
+        joint_ids.append(ids[0])
+      cache.append((joint_ids[0], joint_ids[1]))
+    env._ame_joint_coord_joints_cache = cache
+
+  if coord_signs is None:
+    coord_signs = [[1.0, 1.0]] * len(coord_joints)
+
+  default_joint_pos = asset.data.default_joint_pos
+  joint_pos = asset.data.joint_pos
+  reward = torch.zeros(joint_pos.shape[0], device=joint_pos.device)
+  for i, (joint_1_id, joint_2_id) in enumerate(env._ame_joint_coord_joints_cache):
+    joint_1_rel = joint_pos[:, joint_1_id] - default_joint_pos[:, joint_1_id]
+    joint_2_rel = joint_pos[:, joint_2_id] - default_joint_pos[:, joint_2_id]
+    signed_joint_1 = joint_1_rel * coord_signs[i][0]
+    signed_joint_2 = joint_2_rel * coord_signs[i][1]
+    reward += torch.square(signed_joint_1 - signed_joint_2)
+  if env._ame_joint_coord_joints_cache:
+    reward /= len(env._ame_joint_coord_joints_cache)
+  return reward
+
+
+def joint_deviation_l1(
+  env,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Penalize absolute deviation from default joint pose."""
+
+  asset = env.scene[asset_cfg.name]
+  default_joint_pos = asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+  joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
+  return torch.sum(torch.abs(joint_pos - default_joint_pos), dim=1)
 
 
 def track_body_linear_velocity(

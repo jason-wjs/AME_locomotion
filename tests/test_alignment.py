@@ -73,7 +73,7 @@ class AlignmentTests(unittest.TestCase):
     register_ame_tasks()
 
   def test_runner_cfg_enables_symmetry_augmentation(self) -> None:
-    cfg = unitree_g1_ame_ppo_runner_cfg(stage="stage1")
+    cfg = unitree_g1_ame_ppo_runner_cfg(phase="base")
     symmetry_cfg = cfg.algorithm.symmetry_cfg
     self.assertIsNotNone(symmetry_cfg)
     assert symmetry_cfg is not None
@@ -85,13 +85,13 @@ class AlignmentTests(unittest.TestCase):
     )
 
   def test_default_terrains_match_paper_core_sets(self) -> None:
-    stage1 = unitree_g1_ame_env_cfg(stage="stage1", play=False)
-    stage2 = unitree_g1_ame_env_cfg(stage="stage2", play=False)
-    stage1_keys = set(stage1.scene.terrain.terrain_generator.sub_terrains)
-    stage2_keys = set(stage2.scene.terrain.terrain_generator.sub_terrains)
-    self.assertEqual(stage1_keys, {"pallets", "gaps", "grid_stones", "beams"})
+    base = unitree_g1_ame_env_cfg(phase="base", play=False)
+    finetune = unitree_g1_ame_env_cfg(phase="finetune", play=False)
+    base_keys = set(base.scene.terrain.terrain_generator.sub_terrains)
+    finetune_keys = set(finetune.scene.terrain.terrain_generator.sub_terrains)
+    self.assertEqual(base_keys, {"pallets", "gaps", "grid_stones", "beams"})
     self.assertEqual(
-      stage2_keys,
+      finetune_keys,
       {
         "pallets",
         "gaps",
@@ -104,27 +104,54 @@ class AlignmentTests(unittest.TestCase):
       },
     )
 
-  def test_reward_config_includes_torso_and_humanoid_alignment_terms(self) -> None:
-    stage1 = unitree_g1_ame_env_cfg(stage="stage1", play=False)
-    stage2 = unitree_g1_ame_env_cfg(stage="stage2", play=False)
-    self.assertIs(stage1.rewards["track_linear_velocity"].func, ame_mdp.track_body_linear_velocity)
-    self.assertIs(stage1.rewards["track_angular_velocity"].func, ame_mdp.track_body_angular_velocity)
-    self.assertIs(stage1.rewards["body_ang_vel"].func, ame_mdp.body_angular_velocity_penalty_b)
-    self.assertIn("body_linear_velocity", stage1.rewards)
-    self.assertIn("foot_contact_forces", stage1.rewards)
-    self.assertIn("ankle_orientation", stage1.rewards)
-    self.assertIn("standing_joint_pos", stage2.rewards)
-    self.assertIn("standing_joint_vel", stage2.rewards)
+  def test_reward_config_matches_official_term_set_and_phase_weights(self) -> None:
+    base = unitree_g1_ame_env_cfg(phase="base", play=False)
+    finetune = unitree_g1_ame_env_cfg(phase="finetune", play=False)
+    expected_terms = {
+      "termination_penalty",
+      "track_lin_vel_xy_exp",
+      "track_ang_vel_z_exp",
+      "ang_vel_xy_l2",
+      "undesired_contacts",
+      "dof_torques_l2",
+      "dof_acc_l2",
+      "dof_vel_l2",
+      "dof_pos_limits",
+      "dof_torques_limits",
+      "action_rate_l2",
+      "flat_orientation_l2",
+      "feet_air_time",
+      "feet_air_time_variance",
+      "feet_slide",
+      "feet_stumble",
+      "feet_too_near",
+      "joint_coordination",
+      "joint_deviation_hip",
+      "joint_deviation_arms",
+      "joint_deviation_waists",
+    }
+    self.assertEqual(set(base.rewards), expected_terms)
+    self.assertEqual(set(finetune.rewards), expected_terms)
+    self.assertIs(base.rewards["track_lin_vel_xy_exp"].func, ame_mdp.track_lin_vel_xy_yaw_frame_exp)
+    self.assertIs(base.rewards["track_ang_vel_z_exp"].func, ame_mdp.track_ang_vel_z_world_exp)
+    self.assertIs(base.rewards["joint_deviation_arms"].func, ame_mdp.joint_deviation_l1)
+    self.assertAlmostEqual(base.rewards["feet_stumble"].weight, -2.0)
+    self.assertAlmostEqual(finetune.rewards["feet_stumble"].weight, -5.0)
+    self.assertAlmostEqual(base.rewards["action_rate_l2"].weight, -0.01)
+    self.assertAlmostEqual(finetune.rewards["action_rate_l2"].weight, -0.05)
+    sensor_names = {sensor.name for sensor in base.scene.sensors or ()}
+    self.assertIn("nonfoot_ground_contact", sensor_names)
 
   def test_symmetry_augmentation_mirrors_obs_and_actions(self) -> None:
-    proprio = torch.arange(99, dtype=torch.float32).reshape(1, 99)
+    actor_proprio = torch.arange(96, dtype=torch.float32).reshape(1, 96)
+    critic_proprio = torch.arange(99, dtype=torch.float32).reshape(1, 99)
     terrain = torch.arange(17 * 11 * 3, dtype=torch.float32).reshape(1, 17, 11, 3)
     actions = torch.arange(29, dtype=torch.float32).reshape(1, 29)
     obs = TensorDict(
       {
-        "actor_proprio": proprio.clone(),
+        "actor_proprio": actor_proprio.clone(),
         "actor_terrain": terrain.clone(),
-        "critic_proprio": proprio.clone(),
+        "critic_proprio": critic_proprio.clone(),
         "critic_terrain": terrain.clone(),
       },
       batch_size=[1],
@@ -138,22 +165,28 @@ class AlignmentTests(unittest.TestCase):
 
     self.assertEqual(tuple(augmented_obs.batch_size), (2,))
     self.assertEqual(tuple(augmented_actions.shape), (2, 29))
-    torch.testing.assert_close(augmented_obs["actor_proprio"][0], proprio[0])
+    torch.testing.assert_close(augmented_obs["actor_proprio"][0], actor_proprio[0])
     torch.testing.assert_close(augmented_actions[0], actions[0])
 
     mirrored_terrain = augmented_obs["actor_terrain"][1]
     torch.testing.assert_close(mirrored_terrain[..., :2], terrain[0, ..., :2])
     torch.testing.assert_close(mirrored_terrain[..., 2], terrain[0, :, torch.arange(10, -1, -1), 2])
 
-    mirrored = augmented_obs["actor_proprio"][1]
-    self.assertEqual(mirrored[0].item(), proprio[0, 0].item())
-    self.assertEqual(mirrored[1].item(), -proprio[0, 1].item())
-    self.assertEqual(mirrored[5].item(), -proprio[0, 5].item())
-    self.assertEqual(mirrored[96].item(), proprio[0, 96].item())
-    self.assertEqual(mirrored[97].item(), -proprio[0, 97].item())
-    self.assertEqual(mirrored[98].item(), -proprio[0, 98].item())
-    self.assertEqual(mirrored[25].item(), -proprio[0, 32].item())
-    self.assertEqual(mirrored[32].item(), -proprio[0, 25].item())
+    mirrored_actor = augmented_obs["actor_proprio"][1]
+    self.assertEqual(mirrored_actor[0].item(), -actor_proprio[0, 0].item())
+    self.assertEqual(mirrored_actor[1].item(), actor_proprio[0, 1].item())
+    self.assertEqual(mirrored_actor[5].item(), actor_proprio[0, 5].item())
+    self.assertEqual(mirrored_actor[93].item(), actor_proprio[0, 93].item())
+    self.assertEqual(mirrored_actor[94].item(), -actor_proprio[0, 94].item())
+    self.assertEqual(mirrored_actor[95].item(), -actor_proprio[0, 95].item())
+    self.assertEqual(mirrored_actor[22].item(), -actor_proprio[0, 29].item())
+    self.assertEqual(mirrored_actor[29].item(), -actor_proprio[0, 22].item())
+    mirrored_critic = augmented_obs["critic_proprio"][1]
+    self.assertEqual(mirrored_critic[96].item(), critic_proprio[0, 96].item())
+    self.assertEqual(mirrored_critic[97].item(), -critic_proprio[0, 97].item())
+    self.assertEqual(mirrored_critic[98].item(), -critic_proprio[0, 98].item())
+    self.assertEqual(mirrored_critic[25].item(), -critic_proprio[0, 32].item())
+    self.assertEqual(mirrored_critic[32].item(), -critic_proprio[0, 25].item())
     self.assertEqual(augmented_actions[1, 1].item(), -actions[0, 7].item())
     self.assertEqual(augmented_actions[1, 7].item(), -actions[0, 1].item())
 
@@ -184,7 +217,7 @@ class AlignmentTests(unittest.TestCase):
     torch.testing.assert_close(penalty, torch.tensor([2.0], dtype=torch.float32))
 
   def test_train_config_tyro_help_and_gpu_ids_parse(self) -> None:
-    default = TrainConfig.from_task(resolve_task_spec("g1", "stage1").task_id)
+    default = TrainConfig.from_task(resolve_task_spec("g1", "base").task_id)
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
       with self.assertRaises(SystemExit) as exc:
         tyro.cli(TrainConfig, args=["--help"], default=default, config=mjlab.TYRO_FLAGS)

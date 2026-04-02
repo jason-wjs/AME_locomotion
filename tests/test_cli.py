@@ -18,7 +18,7 @@ class AmeCliTests(unittest.TestCase):
     register_ame_tasks()
 
   def test_train_help_renders_with_symmetry_cfg_defaults(self) -> None:
-    default = TrainConfig.from_task(resolve_task_spec("g1", "stage1").task_id)
+    default = TrainConfig.from_task(resolve_task_spec("g1", "base").task_id)
     stdout = StringIO()
     stderr = StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -34,7 +34,7 @@ class AmeCliTests(unittest.TestCase):
     self.assertIn("--agent.algorithm.symmetry-cfg.use-data-augmentation", rendered)
 
   def test_train_config_accepts_gpu_id_list_literal(self) -> None:
-    default = TrainConfig.from_task(resolve_task_spec("g1", "stage1").task_id)
+    default = TrainConfig.from_task(resolve_task_spec("g1", "base").task_id)
     cfg = tyro.cli(
       TrainConfig,
       args=["--gpu-ids", "[0]"],

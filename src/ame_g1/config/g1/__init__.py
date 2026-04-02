@@ -13,7 +13,7 @@ _REGISTERED = False
 
 
 def register_tasks() -> None:
-  """Register all AME Unitree G1 variant/stage tasks exactly once."""
+  """Register all AME Unitree G1 variant/phase tasks exactly once."""
 
   global _REGISTERED
   if _REGISTERED:
@@ -23,17 +23,17 @@ def register_tasks() -> None:
     register_mjlab_task(
       task_id=task_spec.task_id,
       env_cfg=unitree_g1_ame_env_cfg(
-        stage=task_spec.stage,
+        phase=task_spec.phase,
         variant=task_spec.variant,
         play=False,
       ),
       play_env_cfg=unitree_g1_ame_env_cfg(
-        stage=task_spec.stage,
+        phase=task_spec.phase,
         variant=task_spec.variant,
         play=True,
       ),
       rl_cfg=unitree_g1_ame_ppo_runner_cfg(
-        stage=task_spec.stage,
+        phase=task_spec.phase,
         variant=task_spec.variant,
       ),
       runner_cls=AmeOnPolicyRunner,

@@ -10,7 +10,7 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 
-from ame_g1.config.variants import DEFAULT_VARIANT, AmeStage, AmeVariant, resolve_task_spec
+from ame_g1.config.variants import DEFAULT_VARIANT, AmePhase, AmeVariant, resolve_task_spec
 
 
 @dataclass
@@ -69,6 +69,7 @@ class AmeRunnerCfg(RslRlOnPolicyRunnerCfg):
 def _variant_model_cfg(
   *,
   variant: AmeVariant,
+  use_global_context: bool,
   proprio_obs_groups: tuple[str, ...],
   terrain_obs_group: str,
   distribution_cfg,
@@ -100,22 +101,26 @@ def _variant_model_cfg(
     terrain_input_mode="xyz",
     concat_coords_post_cnn=False,
     cnn_downsample=True,
-    attach_global=True,
+    attach_global=use_global_context,
     encoder_variant="g1",
   )
 
 
 def unitree_g1_ame_ppo_runner_cfg(
-  stage: AmeStage,
+  phase: AmePhase,
   variant: AmeVariant = DEFAULT_VARIANT,
+  use_global_context: bool = False,
 ) -> AmeRunnerCfg:
-  """Create RL config for the AME training stages."""
+  """Create RL config for the AME training phases."""
 
-  entropy_coef = 0.005 if stage == "stage1" else 0.002
-  task_spec = resolve_task_spec(variant, stage)
+  if variant == "paper" and use_global_context:
+    raise ValueError("`paper` variant does not support global-context encoder mode.")
+  entropy_coef = 0.005 if phase == "base" else 0.002
+  task_spec = resolve_task_spec(variant, phase)
   return AmeRunnerCfg(
     actor=_variant_model_cfg(
       variant=variant,
+      use_global_context=use_global_context,
       proprio_obs_groups=("actor_proprio",),
       terrain_obs_group="actor_terrain",
       distribution_cfg={
@@ -127,6 +132,7 @@ def unitree_g1_ame_ppo_runner_cfg(
     ),
     critic=_variant_model_cfg(
       variant=variant,
+      use_global_context=use_global_context,
       proprio_obs_groups=("critic_proprio",),
       terrain_obs_group="critic_terrain",
       distribution_cfg=None,
@@ -158,7 +164,7 @@ def unitree_g1_ame_ppo_runner_cfg(
     experiment_name=task_spec.experiment_name,
     logger="tensorboard",
     num_steps_per_env=24,
-    max_iterations=15000 if stage == "stage1" else 3200,
+    max_iterations=15000 if phase == "base" else 3200,
     obs_groups={
       "actor": ("actor_proprio", "actor_terrain"),
       "critic": ("critic_proprio", "critic_terrain"),

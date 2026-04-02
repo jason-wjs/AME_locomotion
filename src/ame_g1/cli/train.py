@@ -24,7 +24,8 @@ class AmeTrainArgs:
 @dataclass(frozen=True)
 class TaskArgs:
   variant: Literal["paper", "g1"] = DEFAULT_VARIANT
-  stage: Literal["stage1", "stage2"] = "stage1"
+  phase: Literal["base", "finetune"] = "base"
+  global_context: Literal["on", "off"] = "off"
 
 
 def main() -> None:
@@ -36,7 +37,11 @@ def main() -> None:
     return_unknown_args=True,
     config=mjlab.TYRO_FLAGS,
   )
-  task_spec = resolve_task_spec(task_args.variant, task_args.stage)
+  if task_args.variant == "paper" and task_args.global_context == "on":
+    raise ValueError("`--global-context on` is not supported for `--variant paper`.")
+  use_global_context = task_args.global_context == "on"
+  task_spec = resolve_task_spec(task_args.variant, task_args.phase)
+  cfg_global_flag = "on" if use_global_context else "off"
   ame_args, remaining_args = tyro.cli(
     AmeTrainArgs,
     args=remaining_args,
@@ -48,7 +53,10 @@ def main() -> None:
     TrainConfig,
     args=remaining_args,
     default=TrainConfig.from_task(task_spec.task_id),
-    prog=f"{Path(sys.argv[0]).name} --variant {task_args.variant} --stage {task_args.stage}",
+    prog=(
+      f"{Path(sys.argv[0]).name} --variant {task_args.variant} "
+      f"--phase {task_args.phase} --global-context {cfg_global_flag}"
+    ),
     config=mjlab.TYRO_FLAGS,
   )
   checkpoint_path: Path | None = None
@@ -56,7 +64,12 @@ def main() -> None:
     checkpoint_path = Path(ame_args.checkpoint_file).expanduser().resolve()
     if not checkpoint_path.exists():
       raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
-  launch_ame_training(task_spec=task_spec, args=args, checkpoint_file=checkpoint_path)
+  launch_ame_training(
+    task_spec=task_spec,
+    args=args,
+    checkpoint_file=checkpoint_path,
+    use_global_context=use_global_context,
+  )
 
 
 if __name__ == "__main__":

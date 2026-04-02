@@ -25,7 +25,7 @@ from mjlab.utils.wandb import add_wandb_tags
 from mjlab.utils.wrappers import VideoRecorder
 from tensordict import TensorDictBase
 
-from ame_g1.config.variants import AmeTaskSpec, DEFAULT_VARIANT, resolve_task_spec
+from ame_g1.config.variants import AmeTaskSpec
 
 
 class AmeOnPolicyRunner(VelocityOnPolicyRunner):
@@ -149,6 +149,46 @@ class AmeOnPolicyRunner(VelocityOnPolicyRunner):
       json.dump(metadata, file, indent=2, sort_keys=True)
 
 
+def _set_global_context_mode(agent_cfg, task_spec: AmeTaskSpec, use_global_context: bool) -> None:
+  if task_spec.variant == "paper" and use_global_context:
+    raise ValueError("`paper` variant does not support global-context encoder mode.")
+  agent_cfg.actor.attach_global = use_global_context
+  agent_cfg.critic.attach_global = use_global_context
+  encoder_variant = (
+    "g1_global_ctx" if task_spec.variant == "g1" and use_global_context else task_spec.variant
+  )
+  agent_cfg.actor.encoder_variant = encoder_variant
+  agent_cfg.critic.encoder_variant = encoder_variant
+
+
+def _checkpoint_uses_global_context(checkpoint_path: Path) -> bool:
+  checkpoint = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
+  model_state = checkpoint.get("model_state_dict")
+  if not isinstance(model_state, dict):
+    return False
+  global_markers = (
+    "actor.global_encoder.",
+    "actor.query_projector.",
+    "critic.global_encoder.",
+    "critic.query_projector.",
+  )
+  return any(
+    isinstance(key, str) and key.startswith(global_markers)
+    for key in model_state.keys()
+  )
+
+
+def _validate_checkpoint_global_context(checkpoint_path: Path, expected_global: bool) -> None:
+  checkpoint_global = _checkpoint_uses_global_context(checkpoint_path)
+  if checkpoint_global != expected_global:
+    expected_str = "on" if expected_global else "off"
+    found_str = "on" if checkpoint_global else "off"
+    raise ValueError(
+      "Checkpoint model architecture does not match requested global-context mode: "
+      f"expected={expected_str}, found={found_str}, checkpoint={checkpoint_path}"
+    )
+
+
 def resolve_device(device: str | None = None) -> str:
   if device is not None:
     return device
@@ -199,8 +239,14 @@ def load_trained_policy(
   env: RslRlVecEnvWrapper,
   device: str,
   checkpoint_path: Path,
+  use_global_context: bool = False,
 ):
   agent_cfg = load_rl_cfg(task_spec.task_id)
+  _set_global_context_mode(agent_cfg, task_spec, use_global_context)
+  _validate_checkpoint_global_context(
+    checkpoint_path=checkpoint_path,
+    expected_global=bool(agent_cfg.actor.attach_global),
+  )
   runner_cls = load_runner_cls(task_spec.task_id) or MjlabOnPolicyRunner
   runner = runner_cls(env, asdict(agent_cfg), device=device)
   runner.load(
@@ -345,6 +391,10 @@ def run_ame_train(
   add_wandb_tags(cfg.agent.wandb_tags)
   runner.add_git_repo_to_log(__file__)
   if resume_path is not None:
+    _validate_checkpoint_global_context(
+      checkpoint_path=resume_path,
+      expected_global=bool(cfg.agent.actor.attach_global),
+    )
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     runner.load(str(resume_path))
 
@@ -360,7 +410,9 @@ def launch_ame_training(
   task_spec: AmeTaskSpec,
   args: TrainConfig,
   checkpoint_file: Path | None = None,
+  use_global_context: bool = False,
 ) -> None:
+  _set_global_context_mode(args.agent, task_spec, use_global_context)
   log_root_path = Path("logs") / "rsl_rl" / args.agent.experiment_name
   log_root_path.resolve()
   log_dir_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

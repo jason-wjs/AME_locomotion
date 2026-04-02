@@ -227,20 +227,55 @@ class AmeBaseModel(nn.Module):
         else:
           self.global_encoder = None
           self.query_projector = None
+        self.cnns = {
+          "query_proj": self.query_proj,
+          "local_encoder": self.local_encoder,
+          "attention": self.attention,
+          "global_encoder": self.global_encoder,
+          "query_projector": self.query_projector,
+        }
+        self.shared_encoder = False
       else:
-        self.query_proj = cnns["query_proj"]
-        self.local_encoder = cnns["local_encoder"]
-        self.attention = cnns["attention"]
-        self.global_encoder = cnns.get("global_encoder")
-        self.query_projector = cnns.get("query_projector")
-      self.cnns = {
-        "query_proj": self.query_proj,
-        "local_encoder": self.local_encoder,
-        "attention": self.attention,
-        "global_encoder": self.global_encoder,
-        "query_projector": self.query_projector,
-      }
-      self.shared_encoder = cnns is not None
+        shared_cnns: dict[str, nn.Module | None] = {}
+
+        shared_query_proj = cnns.get("query_proj")
+        if (
+          isinstance(shared_query_proj, nn.Linear)
+          and shared_query_proj.in_features == self.proprio_dim
+          and shared_query_proj.out_features == map_latent_dim
+        ):
+          self.query_proj = shared_query_proj
+          shared_cnns["query_proj"] = self.query_proj
+        else:
+          # Actor/Critic proprio dimensions can differ; keep query projection unshared in that case.
+          self.query_proj = nn.Linear(self.proprio_dim, map_latent_dim)
+
+        local_encoder = cnns.get("local_encoder")
+        attention = cnns.get("attention")
+        if local_encoder is None or attention is None:
+          raise ValueError("Shared AME encoders must provide `local_encoder` and `attention`.")
+        self.local_encoder = local_encoder
+        self.attention = attention
+        shared_cnns["local_encoder"] = self.local_encoder
+        shared_cnns["attention"] = self.attention
+
+        if attach_global:
+          shared_global_encoder = cnns.get("global_encoder")
+          shared_query_projector = cnns.get("query_projector")
+          if shared_global_encoder is not None and shared_query_projector is not None:
+            self.global_encoder = shared_global_encoder
+            self.query_projector = shared_query_projector
+            shared_cnns["global_encoder"] = self.global_encoder
+            shared_cnns["query_projector"] = self.query_projector
+          else:
+            self.global_encoder = MLP(map_latent_dim, map_latent_dim, (256, 128), activation)
+            self.query_projector = nn.Linear(map_latent_dim * 2, map_latent_dim)
+        else:
+          self.global_encoder = None
+          self.query_projector = None
+
+        self.cnns = shared_cnns
+        self.shared_encoder = True
       mlp_input_dim = self.proprio_dim + map_latent_dim + (map_latent_dim if attach_global else 0)
     self.mlp = MLP(mlp_input_dim, mlp_output_dim, hidden_dims, activation)
     if self.distribution is not None:

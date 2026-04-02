@@ -7,14 +7,24 @@ from dataclasses import dataclass
 import torch
 from tensordict import TensorDict
 
-PROPRIO_SLICES = {
-  "base_lin_vel": slice(0, 3),
-  "base_ang_vel": slice(3, 6),
-  "projected_gravity": slice(6, 9),
-  "joint_pos": slice(9, 38),
-  "joint_vel": slice(38, 67),
-  "actions": slice(67, 96),
-  "command": slice(96, 99),
+PROPRIO_LAYOUTS = {
+  99: {
+    "base_lin_vel": slice(0, 3),
+    "base_ang_vel": slice(3, 6),
+    "projected_gravity": slice(6, 9),
+    "joint_pos": slice(9, 38),
+    "joint_vel": slice(38, 67),
+    "actions": slice(67, 96),
+    "command": slice(96, 99),
+  },
+  96: {
+    "base_ang_vel": slice(0, 3),
+    "projected_gravity": slice(3, 6),
+    "joint_pos": slice(6, 35),
+    "joint_vel": slice(35, 64),
+    "actions": slice(64, 93),
+    "command": slice(93, 96),
+  },
 }
 
 _ORDINARY_VECTOR_SIGNS = torch.tensor([1.0, -1.0, 1.0])
@@ -128,16 +138,20 @@ def mirror_g1_proprio(proprio: torch.Tensor, env) -> torch.Tensor:
   """Mirror the flattened AME proprio vector."""
 
   spec = _get_symmetry_spec(env)
+  slices = PROPRIO_LAYOUTS.get(int(proprio.shape[1]))
+  if slices is None:
+    raise ValueError(f"Unsupported proprio width for symmetry augmentation: {proprio.shape[1]}")
   mirrored = proprio.clone()
-  mirrored[:, PROPRIO_SLICES["base_lin_vel"]] *= _ORDINARY_VECTOR_SIGNS.to(proprio.device)
-  mirrored[:, PROPRIO_SLICES["base_ang_vel"]] *= _ANGULAR_VECTOR_SIGNS.to(proprio.device)
-  mirrored[:, PROPRIO_SLICES["projected_gravity"]] *= _ORDINARY_VECTOR_SIGNS.to(proprio.device)
+  if "base_lin_vel" in slices:
+    mirrored[:, slices["base_lin_vel"]] *= _ORDINARY_VECTOR_SIGNS.to(proprio.device)
+  mirrored[:, slices["base_ang_vel"]] *= _ANGULAR_VECTOR_SIGNS.to(proprio.device)
+  mirrored[:, slices["projected_gravity"]] *= _ORDINARY_VECTOR_SIGNS.to(proprio.device)
   for key in ("joint_pos", "joint_vel", "actions"):
-    mirrored[:, PROPRIO_SLICES[key]] = _mirror_joint_block(
-      proprio[:, PROPRIO_SLICES[key]],
+    mirrored[:, slices[key]] = _mirror_joint_block(
+      proprio[:, slices[key]],
       spec,
     )
-  mirrored[:, PROPRIO_SLICES["command"]] *= _COMMAND_SIGNS.to(proprio.device)
+  mirrored[:, slices["command"]] *= _COMMAND_SIGNS.to(proprio.device)
   return mirrored
 
 

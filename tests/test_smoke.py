@@ -15,8 +15,8 @@ from ame_g1.config import register as register_ame_tasks
 from ame_g1.config.variants import resolve_task_spec
 
 
-def _make_env(variant: str, stage: str) -> tuple[ManagerBasedRlEnv, RslRlVecEnvWrapper]:
-  task_id = resolve_task_spec(variant, stage).task_id
+def _make_env(variant: str, phase: str) -> tuple[ManagerBasedRlEnv, RslRlVecEnvWrapper]:
+  task_id = resolve_task_spec(variant, phase).task_id
   env_cfg = load_env_cfg(task_id)
   agent_cfg = load_rl_cfg(task_id)
   env_cfg.scene.num_envs = 1
@@ -25,8 +25,8 @@ def _make_env(variant: str, stage: str) -> tuple[ManagerBasedRlEnv, RslRlVecEnvW
   return env, wrapped
 
 
-def _make_runner(variant: str, stage: str, wrapped: RslRlVecEnvWrapper):
-  task_id = resolve_task_spec(variant, stage).task_id
+def _make_runner(variant: str, phase: str, wrapped: RslRlVecEnvWrapper):
+  task_id = resolve_task_spec(variant, phase).task_id
   runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
   agent_cfg = asdict(load_rl_cfg(task_id))
   return runner_cls(wrapped, agent_cfg, device="cpu")
@@ -45,18 +45,18 @@ class AmeSmokeTests(unittest.TestCase):
     self.assertIn("site-packages", str(mjlab_path))
     self.assertFalse(str(mjlab_path).startswith(str(repo_root / "mjlab")))
 
-  def test_stage_observation_shapes(self) -> None:
+  def test_phase_observation_shapes(self) -> None:
     expected_shapes = {"paper": (17, 11, 3), "g1": (33, 21, 3)}
     for variant in ("paper", "g1"):
-      for stage in ("stage1", "stage2"):
-        env, wrapped = _make_env(variant, stage)
+      for phase in ("base", "finetune"):
+        env, wrapped = _make_env(variant, phase)
         try:
           obs = wrapped.get_observations()
           self.assertEqual(
             set(obs.keys()),
             {"actor_proprio", "actor_terrain", "critic_proprio", "critic_terrain"},
           )
-          self.assertEqual(tuple(obs["actor_proprio"].shape), (1, 99))
+          self.assertEqual(tuple(obs["actor_proprio"].shape), (1, 96))
           self.assertEqual(tuple(obs["critic_proprio"].shape), (1, 99))
           self.assertEqual(tuple(obs["actor_terrain"].shape), (1, *expected_shapes[variant]))
           self.assertEqual(tuple(obs["critic_terrain"].shape), (1, *expected_shapes[variant]))
@@ -67,9 +67,9 @@ class AmeSmokeTests(unittest.TestCase):
 
   def test_actor_emits_attention_weights(self) -> None:
     for variant in ("paper", "g1"):
-      env, wrapped = _make_env(variant, "stage1")
+      env, wrapped = _make_env(variant, "base")
       try:
-        runner = _make_runner(variant, "stage1", wrapped)
+        runner = _make_runner(variant, "base", wrapped)
         obs = wrapped.get_observations().to("cpu")
         _ = runner.alg.act(obs)
         attention = runner.alg.actor.last_attention_weights
@@ -83,45 +83,45 @@ class AmeSmokeTests(unittest.TestCase):
       finally:
         env.close()
 
-  def test_stage1_symmetry_update_smoke(self) -> None:
-    env, wrapped = _make_env("g1", "stage1")
+  def test_base_symmetry_update_smoke(self) -> None:
+    env, wrapped = _make_env("g1", "base")
     try:
-      runner = _make_runner("g1", "stage1", wrapped)
+      runner = _make_runner("g1", "base", wrapped)
       runner.cfg["num_steps_per_env"] = 3
       self.assertIsNotNone(runner.alg.symmetry)
       runner.learn(num_learning_iterations=1, init_at_random_ep_len=False)
     finally:
       env.close()
 
-  def test_stage1_checkpoint_loads_into_stage2_runner(self) -> None:
+  def test_base_checkpoint_loads_into_finetune_runner(self) -> None:
     for variant in ("paper", "g1"):
-      env_stage1, wrapped_stage1 = _make_env(variant, "stage1")
-      env_stage2, wrapped_stage2 = _make_env(variant, "stage2")
+      env_base, wrapped_base = _make_env(variant, "base")
+      env_finetune, wrapped_finetune = _make_env(variant, "finetune")
       try:
-        runner_stage1 = _make_runner(variant, "stage1", wrapped_stage1)
-        runner_stage2 = _make_runner(variant, "stage2", wrapped_stage2)
+        runner_base = _make_runner(variant, "base", wrapped_base)
+        runner_finetune = _make_runner(variant, "finetune", wrapped_finetune)
         with tempfile.TemporaryDirectory() as tmpdir:
           checkpoint_path = Path(tmpdir) / "model_0.pt"
-          runner_stage1.save(str(checkpoint_path))
-          runner_stage2.load(str(checkpoint_path), strict=True, map_location="cpu")
+          runner_base.save(str(checkpoint_path))
+          runner_finetune.load(str(checkpoint_path), strict=True, map_location="cpu")
 
         actor_key = "query_proj.weight"
         critic_key = "mlp.0.weight"
         self.assertTrue(
           torch.equal(
-            runner_stage1.alg.actor.state_dict()[actor_key],
-            runner_stage2.alg.actor.state_dict()[actor_key],
+            runner_base.alg.actor.state_dict()[actor_key],
+            runner_finetune.alg.actor.state_dict()[actor_key],
           )
         )
         self.assertTrue(
           torch.equal(
-            runner_stage1.alg.critic.state_dict()[critic_key],
-            runner_stage2.alg.critic.state_dict()[critic_key],
+            runner_base.alg.critic.state_dict()[critic_key],
+            runner_finetune.alg.critic.state_dict()[critic_key],
           )
         )
       finally:
-        env_stage1.close()
-        env_stage2.close()
+        env_base.close()
+        env_finetune.close()
 
 
 if __name__ == "__main__":
