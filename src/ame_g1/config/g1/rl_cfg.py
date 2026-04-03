@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from mjlab.rl import (
   RslRlModelCfg,
@@ -42,6 +43,7 @@ class AmePpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
 class AmeRunnerCfg(RslRlOnPolicyRunnerCfg):
   """Runner config specialized for AME."""
 
+  onnx_export_policy: Literal["never", "final_only", "every_save"] = "final_only"
   actor: AmeModelCfg = field(
     default_factory=lambda: AmeModelCfg(
       hidden_dims=(512, 256, 128),

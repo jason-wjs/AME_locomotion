@@ -7,6 +7,7 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg
 
 from ame_g1.config import register as register_ame_tasks
 from ame_g1.config.variants import DEFAULT_VARIANT, iter_task_specs, resolve_task_spec
+from ame_g1.terrains import make_phase_terrain_generator
 
 
 def _terrain_scan_cfg(env_cfg):
@@ -70,6 +71,16 @@ class VariantConfigTests(unittest.TestCase):
     self.assertFalse(g1_rl.actor.concat_coords_post_cnn)
     self.assertTrue(g1_rl.actor.cnn_downsample)
     self.assertFalse(g1_rl.actor.attach_global)
+
+  def test_finetune_training_terrain_budget_matches_base(self) -> None:
+    base_generator = make_phase_terrain_generator("base", play=False)
+    finetune_generator = make_phase_terrain_generator("finetune", play=False)
+
+    base_tiles = base_generator.num_rows * base_generator.num_cols
+    finetune_tiles = finetune_generator.num_rows * finetune_generator.num_cols
+
+    self.assertEqual(base_tiles, 40)
+    self.assertEqual(finetune_tiles, base_tiles)
 
 
 if __name__ == "__main__":

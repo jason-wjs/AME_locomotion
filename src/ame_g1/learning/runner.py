@@ -9,7 +9,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 import time
-from typing import cast
+from typing import Literal, cast
 
 import torch
 from mjlab.envs import ManagerBasedRlEnv
@@ -26,6 +26,31 @@ from mjlab.utils.wrappers import VideoRecorder
 from tensordict import TensorDictBase
 
 from ame_g1.config.variants import AmeTaskSpec
+
+OnnxExportPolicy = Literal["never", "final_only", "every_save"]
+
+
+def _should_periodically_save(
+  iteration: int,
+  *,
+  start_iteration: int,
+  save_interval: int,
+) -> bool:
+  if save_interval <= 0:
+    return False
+  return iteration > start_iteration and (iteration - start_iteration) % save_interval == 0
+
+
+def _should_export_artifacts(
+  policy: OnnxExportPolicy,
+  *,
+  is_final_save: bool,
+) -> bool:
+  if policy == "never":
+    return False
+  if policy == "every_save":
+    return True
+  return is_final_save
 
 
 class AmeOnPolicyRunner(VelocityOnPolicyRunner):
@@ -63,6 +88,10 @@ class AmeOnPolicyRunner(VelocityOnPolicyRunner):
 
     start_it = self.current_learning_iteration
     total_it = start_it + num_learning_iterations
+    onnx_export_policy = cast(
+      OnnxExportPolicy,
+      self.cfg.get("onnx_export_policy", "final_only"),
+    )
     for it in range(start_it, total_it):
       start = time.time()
       with torch.inference_mode():
@@ -108,24 +137,42 @@ class AmeOnPolicyRunner(VelocityOnPolicyRunner):
         rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"].get("rnd_cfg") is not None else None,
       )
 
-      if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
-        self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore[arg-type]
+      if self.logger.writer is not None and _should_periodically_save(
+        it,
+        start_iteration=start_it,
+        save_interval=self.cfg["save_interval"],
+      ):
+        self.save(
+          os.path.join(self.logger.log_dir, f"model_{it}.pt"),  # type: ignore[arg-type]
+          export_artifacts=_should_export_artifacts(
+            onnx_export_policy,
+            is_final_save=False,
+          ),
+        )
 
     if self.logger.writer is not None:
-      self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt"))  # type: ignore[arg-type]
+      self.save(
+        os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt"),  # type: ignore[arg-type]
+        export_artifacts=_should_export_artifacts(
+          onnx_export_policy,
+          is_final_save=True,
+        ),
+      )
       self.logger.stop_logging_writer()
 
-  def save(self, path: str, infos=None):
+  def save(self, path: str, infos=None, *, export_artifacts: bool = True):
     env_state = {"common_step_counter": self.env.unwrapped.common_step_counter}
     infos = {**(infos or {}), "env_state": env_state}
     saved_dict = self.alg.save()
     saved_dict["iter"] = self.current_learning_iteration
     saved_dict["infos"] = infos
+    policy_path = Path(path).resolve().parent
+    os.makedirs(policy_path, exist_ok=True)
     torch.save(saved_dict, path)
     if self.cfg["upload_model"] and getattr(self.logger, "writer", None) is not None:
       self.logger.save_model(path, self.current_learning_iteration)
-    policy_path = Path(path).resolve().parent
-    os.makedirs(policy_path, exist_ok=True)
+    if not export_artifacts:
+      return
     filename = policy_path.name + ".onnx"
     try:
       self.export_policy_to_onnx(str(policy_path), filename)

@@ -18,6 +18,8 @@ from ame_g1.terrains.families import (
 )
 
 _TERRAIN_SIZE = (8.0, 4.0)
+_PLAY_TERRAIN_ROWS = 5
+_TRAIN_TERRAIN_TILE_BUDGET = 40
 
 
 def _paper_base_terrains():
@@ -113,6 +115,12 @@ def make_phase_terrain_generator(phase: AmePhase, play: bool = False) -> Terrain
     sub_terrains = {**base_terrains, **_paper_finetune_only_terrains()}
   else:
     sub_terrains = base_terrains
+  if play:
+    num_rows = _PLAY_TERRAIN_ROWS
+  else:
+    # Keep the training terrain tile budget stable across phases so finetune can
+    # add terrain families without doubling the imported terrain world size.
+    num_rows = max(1, _TRAIN_TERRAIN_TILE_BUDGET // len(sub_terrains))
 
   return TerrainGeneratorCfg(
     seed=42,
@@ -120,7 +128,7 @@ def make_phase_terrain_generator(phase: AmePhase, play: bool = False) -> Terrain
     size=_TERRAIN_SIZE,
     border_width=1.0,
     border_height=1.2,
-    num_rows=5 if play else 10,
+    num_rows=num_rows,
     num_cols=len(sub_terrains),
     difficulty_range=(0.0, 1.0),
     color_scheme="height",
