@@ -1,5 +1,10 @@
 # AME Reproduction for Unitree G1 on mjlab
 
+当前升级分支适配 mjlab 1.6.0，默认算法仍为社区衍生的 `g1` 变体。
+升级前基线为 `99b8aa4`（`stable/ame1-community`）；本轮不发布新版本。
+维护方式与 AME-2 差异盘点见 [迁移说明](docs/migration-mjlab-1.6.md)，
+开发检查见 [CONTRIBUTING](CONTRIBUTING.md)。
+
 ## 项目简介
 
 本仓库是对论文 [*Attention-Based Map Encoding for Learning Generalized Legged Locomotion*](https://www.science.org/doi/10.1126/scirobotics.adv3604) 中基于注意力的地形编码器方法在Unitree G1 (29DoF)上的复现，使用 `mjlab`作为训练引擎。
@@ -25,10 +30,10 @@
 ## 依赖与安装
 
 - Python: `>=3.10,<3.14`
-- mjlab: `>=1.2.0,<2`（会使用已发布最新兼容版本；当前最新为 1.2.0）
+- mjlab: `==1.6.0`（其余精确依赖由 `uv.lock` 固定）
 
 ```bash
-uv sync
+uv sync --locked
 ```
 
 ## 命令入口

@@ -25,7 +25,3 @@ runs/
 # Secrets
 .env
 .env.*
-
-# docs: only track AME_guide.md
-docs/*
-!docs/AME_guide.md

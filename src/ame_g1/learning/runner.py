@@ -16,8 +16,6 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.scripts.train import TrainConfig
 from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
-from mjlab.tasks.tracking.mdp import MotionCommandCfg
-from mjlab.tasks.velocity.rl.runner import VelocityOnPolicyRunner
 from mjlab.utils.gpu import select_gpus
 from mjlab.utils.os import dump_yaml, get_checkpoint_path, get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
@@ -53,8 +51,8 @@ def _should_export_artifacts(
   return is_final_save
 
 
-class AmeOnPolicyRunner(VelocityOnPolicyRunner):
-  """Thin runner wrapper for AME-owned save hooks."""
+class AmeOnPolicyRunner(MjlabOnPolicyRunner):
+  """Preserve AME's checkpoint cadence and optional final-only exports."""
 
   env: RslRlVecEnvWrapper
 
@@ -161,16 +159,9 @@ class AmeOnPolicyRunner(VelocityOnPolicyRunner):
       self.logger.stop_logging_writer()
 
   def save(self, path: str, infos=None, *, export_artifacts: bool = True):
-    env_state = {"common_step_counter": self.env.unwrapped.common_step_counter}
-    infos = {**(infos or {}), "env_state": env_state}
-    saved_dict = self.alg.save()
-    saved_dict["iter"] = self.current_learning_iteration
-    saved_dict["infos"] = infos
     policy_path = Path(path).resolve().parent
-    os.makedirs(policy_path, exist_ok=True)
-    torch.save(saved_dict, path)
-    if self.cfg["upload_model"] and getattr(self.logger, "writer", None) is not None:
-      self.logger.save_model(path, self.current_learning_iteration)
+    policy_path.mkdir(parents=True, exist_ok=True)
+    super().save(path, infos)
     if not export_artifacts:
       return
     filename = policy_path.name + ".onnx"
@@ -210,17 +201,9 @@ def _set_global_context_mode(agent_cfg, task_spec: AmeTaskSpec, use_global_conte
 
 def _checkpoint_uses_global_context(checkpoint_path: Path) -> bool:
   checkpoint = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
-  model_state = checkpoint.get("model_state_dict")
-  if not isinstance(model_state, dict):
-    return False
-  global_markers = (
-    "actor.global_encoder.",
-    "actor.query_projector.",
-    "critic.global_encoder.",
-    "critic.query_projector.",
-  )
+  model_state = checkpoint["actor_state_dict"]
   return any(
-    isinstance(key, str) and key.startswith(global_markers)
+    key.startswith(("global_encoder.", "query_projector."))
     for key in model_state.keys()
   )
 
@@ -341,7 +324,7 @@ def run_ame_train(
     rank = int(os.environ.get("RANK", "0"))
     os.environ["MUJOCO_EGL_DEVICE_ID"] = str(local_rank)
     device = f"cuda:{local_rank}"
-    seed = cfg.agent.seed + local_rank
+    seed = cfg.agent.seed + rank
 
   configure_torch_backends()
 
@@ -349,31 +332,6 @@ def run_ame_train(
   cfg.env.seed = seed
 
   print(f"[INFO] Training with: device={device}, seed={seed}, rank={rank}")
-
-  registry_name: str | None = None
-  is_tracking_task = "motion" in cfg.env.commands and isinstance(
-    cfg.env.commands["motion"], MotionCommandCfg
-  )
-  if is_tracking_task:
-    motion_cmd = cfg.env.commands["motion"]
-    assert isinstance(motion_cmd, MotionCommandCfg)
-    if motion_cmd.motion_file and Path(motion_cmd.motion_file).exists():
-      print(f"[INFO] Using local motion file: {motion_cmd.motion_file}")
-    elif cfg.registry_name:
-      registry_name = cast(str, cfg.registry_name)
-      if ":" not in registry_name:
-        registry_name = registry_name + ":latest"
-      import wandb
-
-      api = wandb.Api()
-      artifact = api.artifact(registry_name)
-      motion_cmd.motion_file = str(Path(artifact.download()) / "motion.npz")
-    else:
-      raise ValueError(
-        "For tracking tasks, provide either:\n"
-        "  --registry-name your-org/motions/motion-name\n"
-        "  --env.commands.motion.motion-file /path/to/motion.npz"
-      )
 
   if cfg.enable_nan_guard:
     cfg.env.sim.nan_guard.enabled = True
@@ -430,10 +388,12 @@ def run_ame_train(
   if runner_cls is None:
     runner_cls = MjlabOnPolicyRunner
 
-  runner_kwargs = {}
-  if is_tracking_task:
-    runner_kwargs["registry_name"] = registry_name
-  runner = runner_cls(env, agent_cfg, str(log_dir), device, **runner_kwargs)
+  # RSL-RL mutates agent_cfg while constructing the algorithm.
+  if rank == 0:
+    dump_yaml(log_dir / "params" / "env.yaml", _sanitize_yaml_value(env_cfg))
+    dump_yaml(log_dir / "params" / "agent.yaml", _sanitize_yaml_value(agent_cfg))
+
+  runner = runner_cls(env, agent_cfg, str(log_dir), device)
 
   add_wandb_tags(cfg.agent.wandb_tags)
   runner.add_git_repo_to_log(__file__)
@@ -444,10 +404,6 @@ def run_ame_train(
     )
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     runner.load(str(resume_path))
-
-  if rank == 0:
-    dump_yaml(log_dir / "params" / "env.yaml", _sanitize_yaml_value(env_cfg))
-    dump_yaml(log_dir / "params" / "agent.yaml", _sanitize_yaml_value(agent_cfg))
 
   runner.learn(num_learning_iterations=cfg.agent.max_iterations, init_at_random_ep_len=True)
   env.close()
@@ -460,8 +416,7 @@ def launch_ame_training(
   use_global_context: bool = False,
 ) -> None:
   _set_global_context_mode(args.agent, task_spec, use_global_context)
-  log_root_path = Path("logs") / "rsl_rl" / args.agent.experiment_name
-  log_root_path.resolve()
+  log_root_path = (Path(args.log_root) / args.agent.experiment_name).resolve()
   log_dir_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
   if args.agent.run_name:
     log_dir_name += f"_{args.agent.run_name}"
