@@ -88,7 +88,7 @@ class _AmeTorchModel(nn.Module):
       local_features = encoded
 
     query = self.query_proj(proprio)
-    global_feature = None
+    global_feature: torch.Tensor | None = None
     if self.attach_global and self.global_encoder is not None and self.query_projector is not None:
       global_feature = self.global_encoder(local_features).amax(dim=1)
       query = self.query_projector(torch.cat([query, global_feature], dim=-1))

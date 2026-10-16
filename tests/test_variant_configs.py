@@ -25,6 +25,13 @@ class VariantConfigTests(unittest.TestCase):
   def test_default_variant_is_g1(self) -> None:
     self.assertEqual(DEFAULT_VARIANT, "g1")
 
+  def test_upstream_upgrade_preserves_command_and_scan_contract(self) -> None:
+    cfg = load_env_cfg(resolve_task_spec("g1", "base").task_id)
+    self.assertEqual(cfg.commands["twist"].rel_forward_envs, 0.0)
+    sensors = {sensor.name: sensor for sensor in cfg.scene.sensors}
+    self.assertEqual(sensors["terrain_scan"].include_geom_groups, (0, 1, 2))
+    self.assertNotIn("foot_height_scan", sensors)
+
   def test_all_variant_phase_pairs_are_defined(self) -> None:
     specs = list(iter_task_specs())
     self.assertEqual(

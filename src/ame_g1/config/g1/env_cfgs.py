@@ -22,46 +22,27 @@ from ame_g1.config.variants import DEFAULT_VARIANT, AmePhase, AmeVariant, resolv
 from ame_g1.terrains import make_phase_terrain_generator
 
 _ROBOT_CFG = SceneEntityCfg("robot")
-_TORSO_CFG = SceneEntityCfg("robot", body_names=["torso_link"])
 _ANKLES_CFG = SceneEntityCfg(
   "robot",
-  body_names=["left_ankle_roll_link", "right_ankle_roll_link"],
+  body_names=("left_ankle_roll_link", "right_ankle_roll_link"),
 )
 _ARMS_CFG = SceneEntityCfg(
   "robot",
-  joint_names=[
+  joint_names=(
     ".*_shoulder_.*_joint",
     ".*_elbow_joint",
     ".*_wrist_.*",
-  ],
+  ),
 )
 _HIP_CFG = SceneEntityCfg(
   "robot",
-  joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint"],
+  joint_names=(".*_hip_yaw_joint", ".*_hip_roll_joint"),
 )
 _WAIST_CFG = SceneEntityCfg(
   "robot",
-  joint_names=["waist.*"],
+  joint_names=("waist.*",),
 )
-_BODY_CHAIN_CFG = SceneEntityCfg(
-  "robot",
-  body_names=[
-    "pelvis",
-    "torso_link",
-    "left_ankle_roll_link",
-    "right_ankle_roll_link",
-  ],
-)
-_FEET_CFG = SceneEntityCfg("robot", site_names=["left_foot", "right_foot"])
-_STANCE_JOINTS_CFG = SceneEntityCfg(
-  "robot",
-  joint_names=[
-    ".*hip.*",
-    ".*knee.*",
-    ".*ankle.*",
-    ".*waist.*",
-  ],
-)
+_FEET_CFG = SceneEntityCfg("robot", site_names=("left_foot", "right_foot"))
 
 
 def _make_observations(
@@ -328,7 +309,7 @@ def _make_phase_events(cfg, phase: AmePhase, play: bool) -> dict[str, EventTermC
       mode="startup",
       func=dr.body_mass,
       params={
-        "asset_cfg": SceneEntityCfg("robot", body_names=["torso_link"]),
+        "asset_cfg": SceneEntityCfg("robot", body_names=("torso_link",)),
         "ranges": (-1.0, 3.0),
         "operation": "add",
       },
@@ -337,7 +318,7 @@ def _make_phase_events(cfg, phase: AmePhase, play: bool) -> dict[str, EventTermC
       mode="startup",
       func=dr.pseudo_inertia,
       params={
-        "asset_cfg": SceneEntityCfg("robot", body_names=["torso_link"]),
+        "asset_cfg": SceneEntityCfg("robot", body_names=("torso_link",)),
         "alpha_range": (-0.08, 0.08),
         "t_range": (-0.01, 0.01),
       },
@@ -388,6 +369,8 @@ def _configure_terrain_scan(cfg, variant: AmeVariant) -> None:
     assert isinstance(sensor, RayCastSensorCfg)
     sensor.pattern = GridPatternCfg(size=(1.6, 1.0), resolution=resolution)
     sensor.ray_alignment = "yaw"
+    # Preserve the 1.2 observation contract; terrain-only scanning is a separate change.
+    sensor.include_geom_groups = (0, 1, 2)
     return
   raise KeyError("terrain_scan sensor is required for AME terrain observations.")
 
@@ -400,6 +383,12 @@ def unitree_g1_ame_env_cfg(
   """Build the AME environment on top of mjlab's Unitree G1 rough task."""
 
   cfg = deepcopy(unitree_g1_rough_env_cfg(play=play))
+  # mjlab 1.6 adds a forward-only command mixture and a foot-height sensor.
+  # Keep the existing command distribution and only compute sensors used by AME.
+  cfg.commands["twist"].rel_forward_envs = 0.0
+  cfg.scene.sensors = tuple(
+    sensor for sensor in cfg.scene.sensors or () if sensor.name != "foot_height_scan"
+  )
   task_spec = resolve_task_spec(variant, phase)
   cfg.seed = 42
   cfg.episode_length_s = 20.0 if not play else int(1e9)

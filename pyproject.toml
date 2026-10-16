@@ -9,7 +9,7 @@ description = "Attention-Based Map Encoding for Unitree G1 on mjlab."
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
-  "mjlab>=1.2.0,<2",
+  "mjlab==1.6.0",
   "tyro>=0.9.31",
   "matplotlib>=3.9.0",
 ]
