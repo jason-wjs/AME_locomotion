@@ -14,6 +14,7 @@ jobs:
     timeout-minutes: 20
     env:
       CUDA_VISIBLE_DEVICES: ""
+      MUJOCO_GL: "disable"
       PYTHONPATH: tests
       OMP_NUM_THREADS: "2"
     steps:
