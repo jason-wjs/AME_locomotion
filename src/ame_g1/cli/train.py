@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,16 +15,18 @@ from ame_g1 import assert_installed_mjlab
 from ame_g1.config import register as register_ame_tasks
 from ame_g1.config.variants import DEFAULT_VARIANT, resolve_task_spec
 from ame_g1.learning.runner import launch_ame_training
+from ame_g1.simulation import configure_collision_capacity
 from mjlab.scripts.train import TrainConfig
 
 @dataclass(frozen=True)
 class AmeTrainArgs:
   checkpoint_file: str | None = None
+  preflight: bool = False
 
 
 @dataclass(frozen=True)
 class TaskArgs:
-  variant: Literal["paper", "g1"] = DEFAULT_VARIANT
+  variant: Literal["paper", "g1", "ame2", "ame2-gaze"] = DEFAULT_VARIANT
   phase: Literal["base", "finetune"] = "base"
   global_context: Literal["on", "off"] = "off"
 
@@ -47,7 +50,7 @@ def main() -> None:
     args=remaining_args,
     add_help=False,
     return_unknown_args=True,
-    config=mjlab.TYRO_FLAGS,
+    config=tuple(flag for flag in mjlab.TYRO_FLAGS if flag != tyro.conf.FlagConversionOff),
   )
   args = tyro.cli(
     TrainConfig,
@@ -64,6 +67,13 @@ def main() -> None:
     checkpoint_path = Path(ame_args.checkpoint_file).expanduser().resolve()
     if not checkpoint_path.exists():
       raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+  if ame_args.preflight:
+    print(json.dumps({
+      "task_id": task_spec.task_id,
+      "effective_collision_capacities": configure_collision_capacity(task_spec),
+      "scope": "configuration_only_not_physics_validation",
+    }, indent=2, sort_keys=True))
+    return
   launch_ame_training(
     task_spec=task_spec,
     args=args,

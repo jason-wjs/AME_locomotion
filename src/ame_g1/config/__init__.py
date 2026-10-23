@@ -1,6 +1,5 @@
 """Configuration package for AME."""
 
-from ame_g1.config.g1 import register_tasks as register
 from ame_g1.config.variants import AmePhase as AmePhase
 from ame_g1.config.variants import AmeTaskSpec as AmeTaskSpec
 from ame_g1.config.variants import AmeVariant as AmeVariant
@@ -17,3 +16,10 @@ __all__ = [
   "register",
   "resolve_task_spec",
 ]
+
+
+def register() -> None:
+  """Load task builders only after mjlab has finished plugin discovery."""
+  from ame_g1.config.g1 import register_tasks
+
+  register_tasks()

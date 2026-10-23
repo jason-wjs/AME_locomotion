@@ -24,6 +24,9 @@ from mjlab.utils.wrappers import VideoRecorder
 from tensordict import TensorDictBase
 
 from ame_g1.config.variants import AmeTaskSpec
+from ame_g1.learning.ame2_wrapper import RewardComponentVecEnv
+from ame_g1.physics_guard import install_physics_overflow_guard
+from ame_g1.simulation import configure_collision_capacity
 
 OnnxExportPolicy = Literal["never", "final_only", "every_save"]
 
@@ -188,6 +191,10 @@ class AmeOnPolicyRunner(MjlabOnPolicyRunner):
 
 
 def _set_global_context_mode(agent_cfg, task_spec: AmeTaskSpec, use_global_context: bool) -> None:
+  if task_spec.variant in ("ame2", "ame2-gaze"):
+    if use_global_context:
+      raise ValueError("Global-context switching belongs to AME-1; AME-2 uses its fixed teacher architecture.")
+    return
   if task_spec.variant == "paper" and use_global_context:
     raise ValueError("`paper` variant does not support global-context encoder mode.")
   agent_cfg.actor.attach_global = use_global_context
@@ -259,8 +266,11 @@ def make_wrapped_play_env(
   agent_cfg = load_rl_cfg(task_spec.task_id)
   if num_envs is not None:
     env_cfg.scene.num_envs = num_envs
+  capacities = configure_collision_capacity(task_spec)
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=None)
-  wrapped = RslRlVecEnvWrapper(env, clip_actions=agent_cfg.clip_actions)
+  install_physics_overflow_guard(env.sim, task_spec, capacities)
+  wrapper_cls = RewardComponentVecEnv if task_spec.variant in ("ame2", "ame2-gaze") else RslRlVecEnvWrapper
+  wrapped = wrapper_cls(env, clip_actions=agent_cfg.clip_actions)
   return env, wrapped
 
 
@@ -273,10 +283,11 @@ def load_trained_policy(
 ):
   agent_cfg = load_rl_cfg(task_spec.task_id)
   _set_global_context_mode(agent_cfg, task_spec, use_global_context)
-  _validate_checkpoint_global_context(
-    checkpoint_path=checkpoint_path,
-    expected_global=bool(agent_cfg.actor.attach_global),
-  )
+  if task_spec.variant not in ("ame2", "ame2-gaze"):
+    _validate_checkpoint_global_context(
+      checkpoint_path=checkpoint_path,
+      expected_global=bool(agent_cfg.actor.attach_global),
+    )
   runner_cls = load_runner_cls(task_spec.task_id) or MjlabOnPolicyRunner
   runner = runner_cls(env, asdict(agent_cfg), device=device)
   runner.load(
@@ -327,6 +338,9 @@ def run_ame_train(
     seed = cfg.agent.seed + rank
 
   configure_torch_backends()
+  if task_spec.variant == "g1" and task_spec.phase == "base":
+    # Autotuning workspaces exceed the measured full-course memory budget.
+    torch.backends.cudnn.benchmark = False
 
   cfg.agent.seed = seed
   cfg.env.seed = seed
@@ -340,10 +354,14 @@ def run_ame_train(
   if rank == 0:
     print(f"[INFO] Logging experiment in directory: {log_dir}")
 
+  capacities = configure_collision_capacity(task_spec)
   env = ManagerBasedRlEnv(
     cfg=cfg.env,
     device=device,
     render_mode="rgb_array" if cfg.video else None,
+  )
+  install_physics_overflow_guard(
+    env.sim, task_spec, capacities, log_dir / "physics_failures" / f"rank_{rank}",
   )
 
   log_root_path = log_dir.parent
@@ -380,7 +398,8 @@ def run_ame_train(
     )
     print("[INFO] Recording videos during training.")
 
-  env = RslRlVecEnvWrapper(env, clip_actions=cfg.agent.clip_actions)
+  wrapper_cls = RewardComponentVecEnv if task_spec.variant in ("ame2", "ame2-gaze") else RslRlVecEnvWrapper
+  env = wrapper_cls(env, clip_actions=cfg.agent.clip_actions)
   agent_cfg = asdict(cfg.agent)
   env_cfg = asdict(cfg.env)
 
@@ -398,10 +417,11 @@ def run_ame_train(
   add_wandb_tags(cfg.agent.wandb_tags)
   runner.add_git_repo_to_log(__file__)
   if resume_path is not None:
-    _validate_checkpoint_global_context(
-      checkpoint_path=resume_path,
-      expected_global=bool(cfg.agent.actor.attach_global),
-    )
+    if task_spec.variant not in ("ame2", "ame2-gaze"):
+      _validate_checkpoint_global_context(
+        checkpoint_path=resume_path,
+        expected_global=bool(cfg.agent.actor.attach_global),
+      )
     print(f"[INFO]: Loading model checkpoint from: {resume_path}")
     runner.load(str(resume_path))
 

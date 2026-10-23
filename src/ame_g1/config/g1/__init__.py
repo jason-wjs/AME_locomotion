@@ -7,7 +7,6 @@ from mjlab.tasks.registry import register_mjlab_task
 from ame_g1.config.g1.env_cfgs import unitree_g1_ame_env_cfg
 from ame_g1.config.g1.rl_cfg import unitree_g1_ame_ppo_runner_cfg
 from ame_g1.config.variants import iter_task_specs
-from ame_g1.learning.runner import AmeOnPolicyRunner
 
 _REGISTERED = False
 
@@ -19,7 +18,22 @@ def register_tasks() -> None:
   if _REGISTERED:
     return
 
+  from ame_g1.learning.runner import AmeOnPolicyRunner
+  from ame_g1.config.g1.ame2_env_cfg import make_ame2_teacher_env_cfg, make_ame2_gaze_teacher_env_cfg
+  from ame_g1.config.g1.ame2_rl_cfg import Ame2TeacherRunnerCfg, Ame2GazeTeacherRunnerCfg
+
   for task_spec in iter_task_specs():
+    if task_spec.variant in ("ame2", "ame2-gaze"):
+      gaze = task_spec.variant == "ame2-gaze"
+      make_env = make_ame2_gaze_teacher_env_cfg if gaze else make_ame2_teacher_env_cfg
+      register_mjlab_task(
+        task_id=task_spec.task_id,
+        env_cfg=make_env(),
+        play_env_cfg=make_env(play=True),
+        rl_cfg=Ame2GazeTeacherRunnerCfg() if gaze else Ame2TeacherRunnerCfg(),
+        runner_cls=AmeOnPolicyRunner,
+      )
+      continue
     register_mjlab_task(
       task_id=task_spec.task_id,
       env_cfg=unitree_g1_ame_env_cfg(

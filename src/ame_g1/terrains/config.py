@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from mjlab.terrains import (
-  BoxNarrowBeamsTerrainCfg,
   BoxOpenStairsTerrainCfg,
   HfRandomUniformTerrainCfg,
   TerrainGeneratorCfg,
@@ -13,6 +12,7 @@ from ame_g1.config.variants import AmePhase
 from ame_g1.terrains.families import (
   GapTerrainCfg,
   PalletTerrainCfg,
+  RadialBeamsTerrainCfg,
   StairRunTerrainCfg,
   StonePathTerrainCfg,
 )
@@ -27,12 +27,11 @@ def _paper_base_terrains():
     "pallets": PalletTerrainCfg(proportion=1.0),
     "gaps": GapTerrainCfg(proportion=1.0),
     "grid_stones": StonePathTerrainCfg(proportion=1.0, num_columns=3),
-    "beams": BoxNarrowBeamsTerrainCfg(
+    "beams": RadialBeamsTerrainCfg(
       proportion=1.0,
       num_beams=14,
       beam_width_range=(0.18, 0.12),
       beam_height=0.18,
-      spacing=0.7,
       platform_width=1.0,
       border_width=0.35,
       floor_depth=1.8,
@@ -124,7 +123,8 @@ def make_phase_terrain_generator(phase: AmePhase, play: bool = False) -> Terrain
 
   return TerrainGeneratorCfg(
     seed=42,
-    curriculum=not play,
+    # Structured tiles keep columns aligned with terrain families in play/eval.
+    curriculum=True,
     size=_TERRAIN_SIZE,
     border_width=1.0,
     border_height=1.2,

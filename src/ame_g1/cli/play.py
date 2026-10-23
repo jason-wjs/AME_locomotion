@@ -40,7 +40,7 @@ class AmePlayArgs:
 
 @dataclass(frozen=True)
 class TaskArgs:
-  variant: Literal["paper", "g1"] = DEFAULT_VARIANT
+  variant: Literal["paper", "g1", "ame2", "ame2-gaze"] = DEFAULT_VARIANT
   phase: Literal["base", "finetune"] = "base"
   global_context: Literal["on", "off"] = "off"
 
@@ -75,6 +75,8 @@ def main() -> None:
     raise ValueError("`--global-context on` is not supported for `--variant paper`.")
   use_global_context = task_args.global_context == "on"
   task_spec = resolve_task_spec(task_args.variant, task_args.phase)
+  if task_args.variant in ("ame2", "ame2-gaze") and args.dump_file is not None:
+    raise ValueError("Attention dumps currently support the AME-1 variants only.")
   device = resolve_device(args.device)
   checkpoint_path = resolve_checkpoint(
     task_spec,

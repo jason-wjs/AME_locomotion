@@ -24,6 +24,7 @@ ame-plot-attention = "ame_g1.cli.plot_attention:main"
 ame_g1 = "ame_g1.config:register"
 
 [tool.setuptools]
+license-files = ["THIRD_PARTY_NOTICES.md", "licenses/third_party/*.txt"]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]

@@ -19,7 +19,9 @@ from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from ame_g1 import mdp as ame_mdp
 from ame_g1.config.variants import DEFAULT_VARIANT, AmePhase, AmeVariant, resolve_task_spec
+from ame_g1.config.g1.community_robot import make_community_g1_cfg
 from ame_g1.terrains import make_phase_terrain_generator
+from ame_g1.terrains.community import make_community_terrain_generator
 
 _ROBOT_CFG = SceneEntityCfg("robot")
 _ANKLES_CFG = SceneEntityCfg(
@@ -56,6 +58,7 @@ def _make_observations(
     "base_ang_vel": ObservationTermCfg(
       func=vel_mdp.builtin_sensor,
       params={"sensor_name": "robot/imu_ang_vel"},
+      scale=0.2,
       noise=Unoise(n_min=-0.2, n_max=0.2),
     ),
     "projected_gravity": ObservationTermCfg(
@@ -68,6 +71,7 @@ def _make_observations(
     ),
     "joint_vel": ObservationTermCfg(
       func=vel_mdp.joint_vel_rel,
+      scale=0.05,
       noise=Unoise(n_min=-1.5, n_max=1.5),
     ),
     "actions": ObservationTermCfg(func=vel_mdp.last_action),
@@ -95,10 +99,11 @@ def _make_observations(
     "base_ang_vel": ObservationTermCfg(
       func=vel_mdp.builtin_sensor,
       params={"sensor_name": "robot/imu_ang_vel"},
+      scale=0.2,
     ),
     "projected_gravity": ObservationTermCfg(func=vel_mdp.projected_gravity),
     "joint_pos": ObservationTermCfg(func=vel_mdp.joint_pos_rel),
-    "joint_vel": ObservationTermCfg(func=vel_mdp.joint_vel_rel),
+    "joint_vel": ObservationTermCfg(func=vel_mdp.joint_vel_rel, scale=0.05),
     "actions": ObservationTermCfg(func=vel_mdp.last_action),
     "command": ObservationTermCfg(
       func=vel_mdp.generated_commands,
@@ -294,12 +299,11 @@ def _make_phase_events(cfg, phase: AmePhase, play: bool) -> dict[str, EventTermC
     "reset_robot_joints": cfg.events["reset_robot_joints"],
   }
   if play:
-    events["randomize_terrain"] = EventTermCfg(
-      func=envs_mdp.randomize_terrain,
-      mode="reset",
-      params={},
-    )
-    return events
+    # Choose the origin before placing the robot at that origin.
+    return {
+      "randomize_terrain": EventTermCfg(func=envs_mdp.randomize_terrain, mode="reset"),
+      **events,
+    }
   if phase == "finetune":
     events["push_robot"] = cfg.events["push_robot"]
     events["foot_friction"] = cfg.events["foot_friction"]
@@ -368,9 +372,10 @@ def _configure_terrain_scan(cfg, variant: AmeVariant) -> None:
       continue
     assert isinstance(sensor, RayCastSensorCfg)
     sensor.pattern = GridPatternCfg(size=(1.6, 1.0), resolution=resolution)
+    if variant == "g1":
+      sensor.frame.name = "torso_link"
     sensor.ray_alignment = "yaw"
-    # Preserve the 1.2 observation contract; terrain-only scanning is a separate change.
-    sensor.include_geom_groups = (0, 1, 2)
+    sensor.include_geom_groups = (0,)
     return
   raise KeyError("terrain_scan sensor is required for AME terrain observations.")
 
@@ -383,18 +388,34 @@ def unitree_g1_ame_env_cfg(
   """Build the AME environment on top of mjlab's Unitree G1 rough task."""
 
   cfg = deepcopy(unitree_g1_rough_env_cfg(play=play))
-  # mjlab 1.6 adds a forward-only command mixture and a foot-height sensor.
-  # Keep the existing command distribution and only compute sensors used by AME.
-  cfg.commands["twist"].rel_forward_envs = 0.0
+  if variant == "g1":
+    cfg.scene.entities["robot"] = make_community_g1_cfg()
+    cfg.actions["joint_pos"].scale = .25
+  # Restore the community AME task's forward-speed and heading distribution.
+  command = cfg.commands["twist"]
+  command.rel_forward_envs = 0.0
+  command.rel_standing_envs = 0.0
+  command.rel_heading_envs = 1.0
+  command.resampling_time_range = (10.0, 10.0)
+  command.ranges.lin_vel_x = (0.0, 1.5)
+  command.ranges.lin_vel_y = (0.0, 0.0)
+  command.ranges.ang_vel_z = (-1.0, 1.0)
+  cfg.curriculum.pop("command_vel", None)
   cfg.scene.sensors = tuple(
     sensor for sensor in cfg.scene.sensors or () if sensor.name != "foot_height_scan"
   )
   task_spec = resolve_task_spec(variant, phase)
   cfg.seed = 42
+  # Large terrain batches overflow MuJoCo Warp's int32 SAP candidate scan.
+  cfg.sim.broadphase = "nxn"
   cfg.episode_length_s = 20.0 if not play else int(1e9)
   cfg.scene.num_envs = task_spec.play_num_envs if play else task_spec.train_num_envs
-  cfg.scene.terrain.terrain_generator = make_phase_terrain_generator(phase=phase, play=play)  # type: ignore[union-attr]
-  cfg.scene.terrain.max_init_terrain_level = 5  # type: ignore[union-attr]
+  if variant == "g1" and phase == "base":
+    cfg.scene.terrain.terrain_generator = make_community_terrain_generator()  # type: ignore[union-attr]
+    cfg.scene.terrain.max_init_terrain_level = 0  # type: ignore[union-attr]
+  else:
+    cfg.scene.terrain.terrain_generator = make_phase_terrain_generator(phase=phase, play=play)  # type: ignore[union-attr]
+    cfg.scene.terrain.max_init_terrain_level = 5  # type: ignore[union-attr]
   _configure_terrain_scan(cfg, variant)
   _ensure_contact_sensors(cfg)
   cfg.observations = _make_observations(phase=phase, variant=variant, play=play)

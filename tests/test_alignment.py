@@ -12,6 +12,7 @@ import tyro
 
 import mjlab
 from mjlab.scripts.train import TrainConfig
+from mjlab.utils.lab_api.math import quat_from_euler_xyz
 
 from ame_g1 import mdp as ame_mdp
 from ame_g1.config import register as register_ame_tasks
@@ -68,6 +69,47 @@ class _FakeEnv:
 
 
 class AlignmentTests(unittest.TestCase):
+  def test_contact_penalty_retains_a_transient_body_collision(self) -> None:
+    history = torch.zeros(1, 2, 4, 3)
+    history[0, 0, 1, 2] = 20.0
+    env = SimpleNamespace(scene={
+      "contact": SimpleNamespace(data=SimpleNamespace(force_history=history)),
+    })
+    torch.testing.assert_close(
+      ame_mdp.undesired_contacts(env, "contact", threshold=1.0), torch.ones(1),
+    )
+
+  def test_velocity_reward_ignores_body_tilt_but_preserves_heading(self) -> None:
+    quat = quat_from_euler_xyz(
+      torch.tensor([.4, -.3]), torch.tensor([.6, .5]),
+      torch.tensor([0., torch.pi / 2]),
+    )
+    env = SimpleNamespace(
+      scene={"robot": SimpleNamespace(data=SimpleNamespace(
+        root_link_quat_w=quat,
+        root_link_lin_vel_w=torch.tensor([[1., 0., .2], [0., 1., -.2]]),
+      ))},
+      command_manager=SimpleNamespace(
+        get_command=lambda name: torch.tensor([[1., 0., 0.], [1., 0., 0.]]),
+      ),
+    )
+    reward = ame_mdp.track_lin_vel_xy_yaw_frame_exp(env, .25, "twist")
+    torch.testing.assert_close(reward, torch.ones(2))
+
+  def test_biped_reward_tracks_single_support_and_requires_translation(self) -> None:
+    # Single support, double support, a long swing ending in landing, cap, yaw only.
+    air_time = torch.tensor([[0., .3], [0., 0.], [0., 0.], [0., .8], [0., .3]])
+    contact_time = torch.tensor([[.3, 0.], [.3, .3], [.02, .8], [.8, 0.], [.3, 0.]])
+    command = torch.tensor([[.5, 0., 0.]] * 4 + [[0., 0., .5]])
+    env = SimpleNamespace(
+      scene={"feet": SimpleNamespace(data=SimpleNamespace(
+        current_air_time=air_time, current_contact_time=contact_time,
+      ))},
+      command_manager=SimpleNamespace(get_command=lambda name: command),
+    )
+    reward = ame_mdp.feet_air_time_positive_biped(env, "feet", "twist", threshold=.6)
+    torch.testing.assert_close(reward, torch.tensor([.3, 0., 0., .6, 0.]))
+
   @classmethod
   def setUpClass(cls) -> None:
     register_ame_tasks()
@@ -84,9 +126,9 @@ class AlignmentTests(unittest.TestCase):
       "ame_g1.learning.symmetry:augment_g1_symmetry",
     )
 
-  def test_default_terrains_match_paper_core_sets(self) -> None:
-    base = unitree_g1_ame_env_cfg(phase="base", play=False)
-    finetune = unitree_g1_ame_env_cfg(phase="finetune", play=False)
+  def test_paper_terrains_match_paper_core_sets(self) -> None:
+    base = unitree_g1_ame_env_cfg(phase="base", variant="paper", play=False)
+    finetune = unitree_g1_ame_env_cfg(phase="finetune", variant="paper", play=False)
     base_keys = set(base.scene.terrain.terrain_generator.sub_terrains)
     finetune_keys = set(finetune.scene.terrain.terrain_generator.sub_terrains)
     self.assertEqual(base_keys, {"pallets", "gaps", "grid_stones", "beams"})

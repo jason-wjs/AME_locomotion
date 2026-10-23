@@ -6,7 +6,7 @@ import torch
 
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactSensor, RayCastSensor
-from mjlab.utils.lab_api.math import quat_apply_inverse
+from mjlab.utils.lab_api.math import quat_apply_inverse, yaw_quat
 
 _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 
@@ -46,7 +46,9 @@ def track_lin_vel_xy_yaw_frame_exp(
   asset = env.scene[asset_cfg.name]
   command = env.command_manager.get_command(command_name)
   assert command is not None
-  actual_xy = asset.data.root_link_lin_vel_b[:, :2]
+  actual_xy = quat_apply_inverse(
+    yaw_quat(asset.data.root_link_quat_w), asset.data.root_link_lin_vel_w
+  )[:, :2]
   xy_error = torch.sum(torch.square(command[:, :2] - actual_xy), dim=1)
   return torch.exp(-xy_error / std**2)
 
@@ -84,8 +86,8 @@ def undesired_contacts(
   """Penalize non-foot contacts whose force exceeds threshold."""
 
   sensor: ContactSensor = env.scene[sensor_name]
-  assert sensor.data.force is not None
-  force_norm = torch.norm(sensor.data.force, dim=-1)
+  assert sensor.data.force_history is not None
+  force_norm = torch.norm(sensor.data.force_history, dim=-1).amax(dim=-1)
   return torch.sum((force_norm > threshold).float(), dim=1)
 
 
@@ -120,16 +122,21 @@ def feet_air_time_positive_biped(
   command_name: str,
   threshold: float = 0.6,
 ) -> torch.Tensor:
-  """Reward positive swing air-time at first contact for biped feet."""
+  """Reward single-foot support during translation, capped by the threshold."""
 
   sensor: ContactSensor = env.scene[sensor_name]
-  last_air_time = sensor.data.last_air_time
-  assert last_air_time is not None
-  first_contact = sensor.compute_first_contact(dt=env.step_dt)
-  reward = torch.sum(torch.clamp(last_air_time - threshold, min=0.0) * first_contact.float(), dim=1)
+  air_time = sensor.data.current_air_time
+  contact_time = sensor.data.current_contact_time
+  assert air_time is not None
+  assert contact_time is not None
+  in_contact = contact_time > 0.0
+  mode_time = torch.where(in_contact, contact_time, air_time)
+  single_stance = torch.sum(in_contact, dim=1) == 1
+  reward = torch.where(single_stance.unsqueeze(1), mode_time, 0.0).amin(dim=1)
+  reward = torch.clamp(reward, max=threshold)
   command = env.command_manager.get_command(command_name)
   assert command is not None
-  return reward * (_command_norm(command) > 0.1).float()
+  return reward * (torch.linalg.vector_norm(command[:, :2], dim=1) > 0.1).float()
 
 
 def air_time_variance_penalty(

@@ -142,7 +142,8 @@ def unitree_g1_ame_ppo_runner_cfg(
     ),
     algorithm=AmePpoAlgorithmCfg(
       num_learning_epochs=5,
-      num_mini_batches=3,
+      # Full community geometry leaves less memory for the augmented CNN batch.
+      num_mini_batches=8 if variant == "g1" and phase == "base" else 3,
       learning_rate=1.0e-3,
       schedule="adaptive",
       gamma=0.99,

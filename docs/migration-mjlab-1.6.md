@@ -40,7 +40,7 @@
 | 动作 | 继承 mjlab G1 的关节位置动作和逐关节 scale | 延迟关节位置动作，scale=0.25、delay_range=(0,1) | 后续对齐关节顺序、PD、缩放和延迟后再比较策略 |
 | 地形 | base 四类，finetune 八类；8×4 m；训练总预算 40 tiles | 多地形目标到达，12×12 m，带目标 flat-patch 采样 | 保留旧地形；AME-2 单独迁移几何与采样，不只复用名称 |
 | 课程与随机化 | base→finetune；后者加入本体噪声、地图噪声/漂移与动力学扰动 | 目标任务课程、地图噪声课程、不同终止及随机化配方 | 后续逐项记录单位、时序和 reset 行为 |
-| gaze / student | 尚未实现 | 可选 gaze；LSIO/student 代码存在，但 neural mapping 模型尚未提供 | 后续独立能力；不宣称已完成感知闭环 |
+| gaze / student | Gaze 已通过 CPU 数值/闭环、GPU 容量和官方权重参考评估；自身学习与完整 GPU 集成验收进行中。student 未实现，见 [Gaze 迁移](gaze-migration.md) | 可选 gaze；LSIO/student 代码存在，但 neural mapping 模型尚未提供 | 后续独立能力；不宣称已完成感知闭环 |
 
 对应源码：
 

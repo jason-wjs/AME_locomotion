@@ -29,3 +29,6 @@ jobs:
           uv run --locked python -m unittest
           test_alignment test_cli test_variant_configs
           test_observation_contract test_runner_save_policy
+          test_ame2_models test_ame2_ppo test_ame2_actions
+          test_ame2_mdp test_ame2_terrains test_ame2_config
+          test_collision_capacity test_physics_guard

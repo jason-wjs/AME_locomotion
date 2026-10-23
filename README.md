@@ -4,12 +4,13 @@
 升级前基线为 `99b8aa4`（`stable/ame1-community`）；本轮不发布新版本。
 维护方式与 AME-2 差异盘点见 [迁移说明](docs/migration-mjlab-1.6.md)，
 开发检查见 [CONTRIBUTING](CONTRIBUTING.md)。
+下一阶段的目标、实施顺序与范围边界见 [研究路线图](docs/roadmap.md)。
 
 ## 项目简介
 
 本仓库是对论文 [*Attention-Based Map Encoding for Learning Generalized Legged Locomotion*](https://www.science.org/doi/10.1126/scirobotics.adv3604) 中基于注意力的地形编码器方法在Unitree G1 (29DoF)上的复现，使用 `mjlab`作为训练引擎。
 
-代码同时提供两个显式变体：
+代码提供三个显式变体：
 
 - `paper`：作为论文对照基线，尽量贴近 AME 原始设定。
   - `17 x 11` terrain grid
@@ -21,11 +22,21 @@
   - CNN 输入改为 `xyz`
   - 使用 CNN 步长下采样缩短注意力序列
   - 可选全局上下文分支（`--global-context on|off`）
+- `ame2-gaze`：当前重点迁移的 AME-2 主动注视 teacher，23 动作；实现与验证状态见 [Gaze 迁移](docs/gaze-migration.md)。尚无通过完整行为验收的自训练权重。
+- `ame2`：保留作为历史对照的实验性 AME-2 dense teacher，使用目标位置/朝向命令及独立的地形、网络和 PPO 配置。
+  - 仅提供 `--phase base`，自身训练策略尚未通过稀疏地形行为验收。
+  - 接口范围与已完成验证见 [AME-2 搭建记录](docs/stage2-preparation.md)，后续修复结果见 [修复记录](docs/behavior-repair.md)。
 
-训练流程采用 `phase` 语义：
+AME-1（`paper` / `g1`）训练流程采用 `phase` 语义：
 
 - `base`：基础训练
 - `finetune`：在 `base` checkpoint 上微调
+
+修复分支的 `g1 base` 使用社区的八类、200 块地形，训练和 play 共用同一生成器。
+默认训练规模为 1792 环境、8 个 minibatch，并关闭 cuDNN autotuning；
+这是单张 H100 80GB 上的实测容量配置，不是地形学习已通过验收的声明。
+当前仍在排查高速稳定性和稀疏地形学习，未发布正式训练权重。
+物理表示差异、对照结果及训练预算见 [修复记录](docs/behavior-repair.md)。
 
 ## 依赖与安装
 
@@ -49,9 +60,11 @@ uv run ame-plot-attention --help
 
 核心参数：
 
-- `--variant`: `paper | g1`
+- `--variant`: `paper | g1 | ame2 | ame2-gaze`
 - `--phase`: `base | finetune`
 - `--global-context`: `on | off`（`paper` 仅支持 `off`）
+- `ame-train --preflight`：只检查配置和实际碰撞容量，不启动训练。
+  Gaze 长跑中断原因、容量修复与故障状态保存见 [EPA 容量修复](docs/gaze-collision-capacity.md)。
 
 ## 快速开始
 

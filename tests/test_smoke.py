@@ -14,7 +14,7 @@ from mjlab.tasks.registry import load_env_cfg, load_rl_cfg, load_runner_cls
 
 from ame_g1.config import register as register_ame_tasks
 from ame_g1.config.variants import resolve_task_spec
-from ame_g1.learning.runner import _validate_checkpoint_global_context
+from ame_g1.learning.runner import _set_global_context_mode, _validate_checkpoint_global_context
 
 
 _DEVICE = os.environ.get("AME_TEST_DEVICE", "cpu")
@@ -33,11 +33,12 @@ def _make_env(variant: str, phase: str, num_envs: int = 1) -> tuple[ManagerBased
 def _make_runner(variant: str, phase: str, wrapped: RslRlVecEnvWrapper, global_context=False):
   task_id = resolve_task_spec(variant, phase).task_id
   runner_cls = load_runner_cls(task_id) or MjlabOnPolicyRunner
-  agent_cfg = asdict(load_rl_cfg(task_id))
-  agent_cfg["num_steps_per_env"] = 6
+  config = load_rl_cfg(task_id)
+  _set_global_context_mode(config, resolve_task_spec(variant, phase), global_context)
+  agent_cfg = asdict(config)
+  # The one-environment smoke run needs a sample for each of G1's eight minibatches.
+  agent_cfg["num_steps_per_env"] = 8
   agent_cfg["algorithm"]["num_learning_epochs"] = 1
-  agent_cfg["actor"]["attach_global"] = global_context
-  agent_cfg["critic"]["attach_global"] = global_context
   return runner_cls(wrapped, agent_cfg, device=_DEVICE)
 
 
@@ -125,6 +126,7 @@ class AmeSmokeTests(unittest.TestCase):
           runner_finetune.load(str(checkpoint_path), strict=True, map_location=_DEVICE)
 
         obs = wrapped_base.get_observations()
+        runner_base.alg.actor.eval()
         exported = torch.jit.script(runner_base.alg.actor.as_jit().eval())
         with torch.inference_mode():
           torch.testing.assert_close(

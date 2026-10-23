@@ -287,6 +287,16 @@ class AmeBaseModel(nn.Module):
 
   def _build_local_encoder(self) -> nn.Sequential:
     input_channels = 1 if self.terrain_input_mode == "z" else 3
+    if self.encoder_variant in ("g1", "g1_global_ctx"):
+      # Preserve the community encoder, including its learned running statistics.
+      return nn.Sequential(
+        nn.Conv2d(input_channels, 16, kernel_size=5, padding=2, stride=2),
+        nn.ReLU(),
+        nn.BatchNorm2d(16),
+        nn.Conv2d(16, self._local_encoder_output_dim, kernel_size=3, padding=1),
+        nn.ReLU(),
+        nn.BatchNorm2d(self._local_encoder_output_dim),
+      )
     if self.cnn_downsample:
       return nn.Sequential(
         nn.Conv2d(input_channels, 16, kernel_size=5, padding=2, stride=2),

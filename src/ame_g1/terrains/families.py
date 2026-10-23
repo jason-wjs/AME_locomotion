@@ -8,6 +8,7 @@ import mujoco
 import numpy as np
 
 from mjlab.terrains.terrain_generator import SubTerrainCfg, TerrainGeometry, TerrainOutput
+from mjlab.terrains.utils import make_border
 from mjlab.utils.color import RGBA
 
 _FLOOR_COLOR: RGBA = (0.18, 0.18, 0.18, 1.0)
@@ -112,6 +113,67 @@ def _add_pentagon_support(
     pos=(center_xy[0], center_xy[1], top_height - height * 0.5),
   )
   return TerrainGeometry(geom=geom, color=color)
+
+
+@dataclass(kw_only=True)
+class RadialBeamsTerrainCfg(SubTerrainCfg):
+  """Radial supports joining the central platform to a rectangular tile rim."""
+
+  num_beams: int = 14
+  beam_width_range: tuple[float, float] = (0.18, 0.12)
+  """Beam widths at difficulty zero and one, respectively."""
+  beam_height: float = 0.18
+  platform_width: float = 1.0
+  border_width: float = 0.35
+  floor_depth: float = 1.8
+
+  def function(
+    self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator
+  ) -> TerrainOutput:
+    del rng
+    body = spec.body("terrain")
+    center = np.asarray(self.size) / 2
+    inner = center - self.border_width
+    width = float(np.interp(difficulty, (0., 1.), self.beam_width_range))
+    radius = min(
+      self.platform_width / 2,
+      width / (2 * np.sqrt(2) * np.sin(np.pi / self.num_beams)),
+    )
+    geometries = [_add_floor(body, self.size, self.floor_depth)]
+    for geom in make_border(
+      body, self.size, tuple(2 * inner), self.beam_height + self.floor_depth,
+      (*center, (self.beam_height - self.floor_depth) / 2),
+    ):
+      geometries.append(TerrainGeometry(geom=geom, color=_SUPPORT_COLOR))
+    geometries.append(_support_geometry(
+      body, tuple(center), (2 * radius, 2 * radius),
+      self.beam_height, self.floor_depth,
+    ))
+
+    for angle in np.linspace(0, 2 * np.pi, self.num_beams, endpoint=False):
+      direction = np.array([np.cos(angle), np.sin(angle)])
+      projection = np.abs(direction)
+      lateral = width / 2 * projection[::-1]
+      distances = np.divide(
+        inner, projection, out=np.full(2, np.inf), where=projection > 0,
+      )
+      side = int(np.argmin(distances))
+      # The entire beam tip reaches the rim; all corners stay inside the tile.
+      end = (inner[side] + lateral[side]) / projection[side]
+      outer_limit = np.divide(
+        center - lateral, projection,
+        out=np.full(2, np.inf), where=projection > 0,
+      ).min()
+      end = min(end, outer_limit)
+      geometry = _support_geometry(
+        body, tuple(center + (radius + end) / 2 * direction),
+        (end - radius, width), self.beam_height, self.floor_depth,
+      )
+      geometry.geom.quat = (np.cos(angle / 2), 0., 0., np.sin(angle / 2))
+      geometries.append(geometry)
+    return TerrainOutput(
+      origin=np.array([*center, self.beam_height]), geometries=geometries,
+    )
 
 
 @dataclass(kw_only=True)
